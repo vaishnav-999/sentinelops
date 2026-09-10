@@ -200,7 +200,7 @@ function Row({
     <TableRow
       onClick={() => onSelect(incident.id)}
       data-state={selected ? "selected" : undefined}
-      className="cursor-pointer"
+      className="cursor-pointer outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

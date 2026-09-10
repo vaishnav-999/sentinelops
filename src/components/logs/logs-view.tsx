@@ -115,6 +115,16 @@ export function LogsView() {
   }, [paused, frozen, logs]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // "Copied" reverts on a timer; keep the handle so unmounting cancels it.
+  const copyTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
@@ -144,7 +154,8 @@ export function LogsView() {
     try {
       await navigator.clipboard.writeText(visibleText());
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard can be denied (insecure origin / permission); stay silent
       // rather than throwing an error toast the operator cannot act on.
@@ -212,7 +223,8 @@ export function LogsView() {
                 onClick={() => toggleLevel(level)}
                 aria-pressed={on}
                 className={cn(
-                  "h-8 px-2.5 text-xs",
+                  "h-8 px-2.5 text-xs outline-none",
+                  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                   numeric,
                   on ? "bg-selected text-text" : "text-muted hover:text-text",
                 )}

@@ -5,7 +5,7 @@ import { ArrowDown } from "lucide-react";
 import { cn } from "cn";
 import { numeric } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { formatClockTime } from "@/lib/metrics";
+import { ClockTime } from "@/components/ui/clock-time";
 import { tokenizeTerminal } from "@/lib/remediation";
 import { TONE_TEXT } from "@/lib/tone";
 import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
@@ -161,7 +161,9 @@ export function ExecutionTerminal({
 function Line({ line, caret }: { line: TerminalLine; caret?: boolean }) {
   return (
     <li className="flex gap-3">
-      <span className="shrink-0 text-muted">[{formatClockTime(line.t)}]</span>
+      <span className="shrink-0 text-muted">
+        [<ClockTime t={line.t} />]
+      </span>
       <span className="min-w-0 text-text-2">
         {tokenizeTerminal(line.text).map((token, i) => (
           <span key={i} className={token.tone ? TONE_TEXT[token.tone] : undefined}>

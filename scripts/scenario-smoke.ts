@@ -17,7 +17,9 @@
  *   6. Reset in the middle of remediation — clean healthy state, no incident
  *      stuck mid-stage.
  *   7. Unknown anomaly — ends escalated, and nothing was restarted.
- *   8. No duplicate incident ids, and no timers left running afterwards.
+ *   8. Route changes during a live run add neither a second engine timer
+ *      nor a duplicate toast, and the run still completes.
+ *   9. No duplicate incident ids, and no timers left running afterwards.
  *
  * The engine advances 1 simulated second per tick regardless of `timeScale`,
  * so the compressed run exercises exactly the same step sequence the browser
@@ -94,6 +96,30 @@ async function runToCompletion(id: ScenarioId): Promise<void> {
 async function resetDemo(): Promise<void> {
   engine.reset();
   await sleep(20);
+}
+
+/** One toast the engine pushed through its notifier sink. */
+interface Notification {
+  level: string;
+  title: string;
+  description?: string;
+}
+
+const notifications: Notification[] = [];
+
+/**
+ * Replays what `SimulationProvider`'s effect does on mount, and its cleanup on
+ * unmount. App Router navigation between console routes does not unmount the
+ * provider (it lives in the root layout), but StrictMode, HMR and a full
+ * remount all run this pair — so the invariant under test is that running it
+ * repeatedly mid-run adds neither an engine timer nor a duplicate toast sink.
+ */
+function mountProvider(): () => void {
+  engine.setNotifier((level, title, description) => {
+    notifications.push({ level, title, description });
+  });
+  engine.start();
+  return () => engine.setNotifier(null);
 }
 
 function terminalHas(fragment: string): boolean {
@@ -487,8 +513,72 @@ async function main(): Promise<void> {
     );
   }
 
-  /* -------- 8. teardown: no leftover timers ---------------------------- */
-  console.log("\n8. Teardown");
+  /* -------- 8. route changes during a live run ------------------------- */
+  console.log("\n8. Navigating between routes during a run");
+  await resetDemo();
+  {
+    // Baseline tick rate with a single provider mounted: the engine advances
+    // the simulated clock one second per tick, so the clock delta over a fixed
+    // window is a direct count of the timers running.
+    let unmount = mountProvider();
+    const beforeClock = state().cluster.t;
+    await sleep(120);
+    const baselineTicks = (state().cluster.t - beforeClock) / 1000;
+
+    notifications.length = 0;
+    runsStarted += 1;
+    engine.runScenario("memory-leak");
+
+    // Six route changes while the scenario plays, each unmounting and
+    // remounting the provider the way a full remount would.
+    for (let i = 0; i < 6; i += 1) {
+      await sleep(25);
+      unmount();
+      unmount = mountProvider();
+    }
+
+    const midClock = state().cluster.t;
+    await sleep(120);
+    const afterTicks = (state().cluster.t - midClock) / 1000;
+    check(
+      afterTicks <= baselineTicks * 1.5,
+      "route changes did not add a second engine timer",
+      [baselineTicks, afterTicks],
+    );
+
+    await waitFor(
+      "memory-leak to finish across the navigations",
+      () => state().activeScenario === null,
+      15000,
+    );
+
+    check(
+      state().chaosRun?.outcome === "auto_healed",
+      "the run still auto-healed across the navigations",
+      state().chaosRun?.outcome,
+    );
+
+    const keys = notifications.map(
+      (n) => `${n.level}|${n.title}|${n.description ?? ""}`,
+    );
+    const duplicated = keys.filter((k, i) => keys.indexOf(k) !== i);
+    check(duplicated.length === 0, "no toast was delivered twice", duplicated.slice(0, 3));
+    check(
+      notifications.length > 0,
+      "toasts were still delivered after remounting",
+      notifications.length,
+    );
+    check(
+      stuckIncidents().length === 0,
+      "no incident left mid-stage by the navigations",
+      stuckIncidents().map((x) => x.id),
+    );
+
+    unmount();
+  }
+
+  /* -------- 9. teardown: no leftover timers ---------------------------- */
+  console.log("\n9. Teardown");
   await resetDemo();
   check(
     state().executions.length === 6,

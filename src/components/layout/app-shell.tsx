@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { MotionConfig } from "motion/react";
 import { cn } from "cn";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
@@ -20,6 +20,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const collapsed = useSentinelStore((s) => s.sidebarCollapsed);
   const reducedMotion = useSentinelStore((s) => s.reducedMotion);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Sheets, dialogs and toasts render in portals outside this tree, so the
+  // in-app reduced-motion toggle is published on <html> where a CSS rule can
+  // reach every one of them — the OS media query already covers the same set.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (reducedMotion) root.setAttribute("data-reduced-motion", "true");
+    else root.removeAttribute("data-reduced-motion");
+  }, [reducedMotion]);
 
   return (
     <MotionConfig reducedMotion={reducedMotion ? "always" : "user"}>

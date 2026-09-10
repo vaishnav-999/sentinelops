@@ -131,7 +131,8 @@ function ExecutionRow({
         onClick={onSelect}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "w-full border-b border-border px-4 py-2.5 text-left transition-colors duration-150 ease-out",
+          "w-full border-b border-border px-4 py-2.5 text-left outline-none transition-colors duration-150 ease-out",
+          "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
           selected ? "bg-selected" : "hover:bg-hover",
         )}
       >

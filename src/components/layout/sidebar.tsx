@@ -46,7 +46,8 @@ const ICONS: Record<NavIconId, LucideIcon> = {
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SLOT = "relative z-10 flex size-4 shrink-0 items-center justify-center";
 const ROW =
-  "relative flex h-9 items-center rounded-md px-2 text-sm transition-colors duration-150";
+  "relative flex h-9 items-center rounded-md px-2 text-sm transition-colors duration-150 " +
+  "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
 
 function clusterTone(
   connection: ConnectionStatus,

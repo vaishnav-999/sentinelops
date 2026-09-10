@@ -173,7 +173,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
       <button
         type="button"
         onClick={() => (live ? engine.pause() : engine.resume())}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-2 hover:bg-hover"
+        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-2 hover:bg-hover outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         aria-pressed={live}
       >
         <span
@@ -207,6 +207,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
               aria-pressed={timeRange === range}
               className={cn(
                 "h-7 px-2 text-xs",
+                "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                 timeRange === range
                   ? "bg-selected text-text"
                   : "text-muted hover:text-text",
@@ -238,7 +239,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
         <button
           type="button"
           onClick={() => setCommandOpen(true)}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-2 hover:bg-hover"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-2 hover:bg-hover outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
           aria-label="Open command palette"
         >
           <Search className="size-4 text-muted" strokeWidth={1.75} />
@@ -311,7 +312,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
             render={
               <button
                 type="button"
-                className="inline-flex items-center text-muted min-[1280px]:hidden"
+                className="inline-flex items-center rounded-sm text-muted min-[1280px]:hidden outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                 aria-label="Demo · simulated data"
               />
             }

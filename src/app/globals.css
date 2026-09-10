@@ -248,6 +248,24 @@
       animation: none;
     }
   }
+
+  /* Same effect for the in-app Settings toggle, which the media query
+     cannot see. Covers the pulses that are pure CSS with no React guard. */
+  :root[data-reduced-motion="true"] .animate-pulse {
+    animation: none;
+  }
+}
+
+@layer utilities {
+  /* Scrollable, but without a visible bar — for short strips (a 40px panel
+     header, the command list) where a scrollbar would dominate the row.
+     Referenced by command.tsx and panel.tsx. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @layer components {

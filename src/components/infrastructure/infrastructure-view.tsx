@@ -111,7 +111,7 @@ function NodeList({ onSelect }: { onSelect: (id: string) => void }) {
               type="button"
               disabled={node.kind === "internet"}
               onClick={() => onSelect(node.id)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-hover disabled:pointer-events-none"
+              className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none"
             >
               <span
                 className={cn(

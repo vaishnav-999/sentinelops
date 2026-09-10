@@ -20,6 +20,9 @@ import type { InfraEdge, InfraNode, ServiceStatus } from "@/lib/types";
 const CANVAS_W = 900;
 const CANVAS_H = 500;
 
+/** Narrowest the map can go before the outermost node boxes clip. */
+const MIN_CANVAS_W = 780;
+
 const EDGE_LABEL: Record<NonNullable<InfraEdge["kind"]>, string> = {
   request: "http",
   data: "sql",
@@ -53,79 +56,88 @@ export function TopologyMap({
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   return (
-    <div
-      className="relative w-full"
-      style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}`, minHeight: 440 }}
-    >
-      <svg
-        className="absolute inset-0 size-full"
-        viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-        preserveAspectRatio="none"
-        aria-hidden
+    // Node boxes are fixed-width and centred on a percentage position, so the
+    // canvas needs a floor before the outermost nodes start clipping. Below
+    // that the panel scrolls horizontally, the way the incidents table does.
+    <div className="overflow-x-auto">
+      <div
+        className="relative w-full"
+        style={{
+          aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
+          minHeight: 440,
+          minWidth: MIN_CANVAS_W,
+        }}
       >
+        <svg
+          className="absolute inset-0 size-full"
+          viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
+          preserveAspectRatio="none"
+          aria-hidden
+        >
+          {edges.map((edge) => {
+            const from = byId.get(edge.from);
+            const to = byId.get(edge.to);
+            if (!from || !to) return null;
+            const tone = edgeTone(from.status, to.status);
+            const midX = (from.layout.x + to.layout.x) / 2;
+            const midY = (from.layout.y + to.layout.y) / 2;
+            return (
+              <g key={edge.id}>
+                <line
+                  x1={from.layout.x}
+                  y1={from.layout.y}
+                  x2={to.layout.x}
+                  y2={to.layout.y}
+                  stroke={EDGE_STROKE[tone]}
+                  strokeWidth={2}
+                  strokeDasharray={edge.kind === "queue" ? "5 4" : undefined}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle
+                  cx={midX}
+                  cy={midY}
+                  r={3}
+                  fill={EDGE_STROKE[tone]}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            );
+          })}
+        </svg>
+
+        {/* Edge kind labels sit in HTML so they keep their 12px size at any width. */}
         {edges.map((edge) => {
           const from = byId.get(edge.from);
           const to = byId.get(edge.to);
-          if (!from || !to) return null;
-          const tone = edgeTone(from.status, to.status);
-          const midX = (from.layout.x + to.layout.x) / 2;
-          const midY = (from.layout.y + to.layout.y) / 2;
+          if (!from || !to || edge.kind === undefined) return null;
+          const x = (from.layout.x + to.layout.x) / 2;
+          const y = (from.layout.y + to.layout.y) / 2;
           return (
-            <g key={edge.id}>
-              <line
-                x1={from.layout.x}
-                y1={from.layout.y}
-                x2={to.layout.x}
-                y2={to.layout.y}
-                stroke={EDGE_STROKE[tone]}
-                strokeWidth={2}
-                strokeDasharray={edge.kind === "queue" ? "5 4" : undefined}
-                vectorEffect="non-scaling-stroke"
-              />
-              <circle
-                cx={midX}
-                cy={midY}
-                r={3}
-                fill={EDGE_STROKE[tone]}
-                vectorEffect="non-scaling-stroke"
-              />
-            </g>
+            <span
+              key={`${edge.id}-label`}
+              className={cn(
+                "pointer-events-none absolute -translate-x-1/2 translate-y-2 bg-panel px-1 text-xs text-muted",
+                numeric,
+              )}
+              style={{
+                left: `${(x / CANVAS_W) * 100}%`,
+                top: `${(y / CANVAS_H) * 100}%`,
+              }}
+            >
+              {EDGE_LABEL[edge.kind]}
+            </span>
           );
         })}
-      </svg>
 
-      {/* Edge kind labels sit in HTML so they keep their 12px size at any width. */}
-      {edges.map((edge) => {
-        const from = byId.get(edge.from);
-        const to = byId.get(edge.to);
-        if (!from || !to || edge.kind === undefined) return null;
-        const x = (from.layout.x + to.layout.x) / 2;
-        const y = (from.layout.y + to.layout.y) / 2;
-        return (
-          <span
-            key={`${edge.id}-label`}
-            className={cn(
-              "pointer-events-none absolute -translate-x-1/2 translate-y-2 bg-panel px-1 text-xs text-muted",
-              numeric,
-            )}
-            style={{
-              left: `${(x / CANVAS_W) * 100}%`,
-              top: `${(y / CANVAS_H) * 100}%`,
-            }}
-          >
-            {EDGE_LABEL[edge.kind]}
-          </span>
-        );
-      })}
-
-      {nodes.map((node) => (
-        <NodeBox
-          key={node.id}
-          node={node}
-          reduced={reduced}
-          onSelect={onSelect}
-        />
-      ))}
+        {nodes.map((node) => (
+          <NodeBox
+            key={node.id}
+            node={node}
+            reduced={reduced}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
     </div>
   );
 }

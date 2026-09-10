@@ -43,7 +43,12 @@ export function PanelHeader({
     >
       <h2 className="truncate text-xs font-medium text-text-2">{title}</h2>
       {actions ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        // Wide action rows (the five telemetry toggles) do not fit a 375px
+        // panel. The header keeps its 40px height and scrolls instead of
+        // clipping the last control.
+        <div className="no-scrollbar flex min-w-0 items-center gap-2 overflow-x-auto [&>*]:shrink-0">
+          {actions}
+        </div>
       ) : null}
     </div>
   );
