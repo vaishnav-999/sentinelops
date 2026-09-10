@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { Bell, Info, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
 import { cn } from "cn";
@@ -9,6 +8,7 @@ import { ENVIRONMENTS, OPERATOR, TIME_RANGES } from "@/lib/mock-data/constants";
 import { engine } from "@/lib/simulation/engine";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import type { EnvironmentId, Severity, TimeRange } from "@/lib/types";
+import { useMounted } from "@/lib/hooks/use-mounted";
 import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -45,6 +45,14 @@ import {
 
 const IMPORTANT: Severity[] = ["warn", "crit", "ai", "ok"];
 
+/** Browser-only; call after mount so the ⌘ hint never renders on the server. */
+function isMac(): boolean {
+  return (
+    navigator.platform.toUpperCase().includes("MAC") ||
+    navigator.userAgent.includes("Mac")
+  );
+}
+
 const SEV_DOT: Record<Severity, string> = {
   info: "bg-muted",
   ok: "bg-ok",
@@ -63,8 +71,7 @@ function formatEventTime(t: number): string {
 
 function ThemeMenu() {
   const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useMounted();
 
   return (
     <DropdownMenu>
@@ -121,13 +128,9 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
     ENVIRONMENTS.find((e) => e.id === environment)?.cluster ??
     "sentinel-prod-cluster";
 
-  const [shortcut, setShortcut] = useState("Ctrl K");
-  useEffect(() => {
-    const mac =
-      navigator.platform.toUpperCase().includes("MAC") ||
-      navigator.userAgent.includes("Mac");
-    setShortcut(mac ? "⌘K" : "Ctrl K");
-  }, []);
+  // navigator is browser-only, so the hint renders as Ctrl K until mounted.
+  const mounted = useMounted();
+  const shortcut = mounted && isMac() ? "⌘K" : "Ctrl K";
 
   const important = events
     .filter((e) => IMPORTANT.includes(e.severity))

@@ -40,6 +40,8 @@ export const CAPS = {
   events: 200,
   logs: 1000,
   terminal: 200,
+  /** Coarse trail: 61 samples × TRAIL_INTERVAL_TICKS = a 5-minute window. */
+  trail: 61,
 } as const;
 
 /** Default healthy detector pair (Isolation Forest + static threshold). */
@@ -50,6 +52,8 @@ function initialDetectors(): DetectorResult[] {
       label: "Static threshold rule",
       fired: false,
       firedAt: null,
+      value: 90,
+      detail: "memory > 90%",
     },
     {
       kind: "ml",
@@ -74,6 +78,11 @@ export interface SentinelState {
   services: Service[];
   histories: Record<string, MetricSample[]>;
   clusterHistory: ClusterMetrics[];
+  /**
+   * Coarsely sampled cluster history covering ~5 minutes, used for the
+   * "delta vs 5 min ago" figures. `clusterHistory` only spans 60 ticks.
+   */
+  clusterTrail: ClusterMetrics[];
   cluster: ClusterMetrics;
 
   /* Topology (static seeds, but chaos may flip node/container status) */
@@ -126,6 +135,11 @@ export interface SentinelActions {
   setReducedMotion: (v: boolean) => void;
   toggleReducedMotion: () => void;
   setLive: (v: boolean) => void;
+  /**
+   * Flips the simulated telemetry link. While `"lost"` the engine stops
+   * writing, so every panel keeps showing its last known values.
+   */
+  setConnection: (c: ConnectionStatus) => void;
   updateSettings: (patch: Partial<SentinelSettings>) => void;
   /** Restore the exact seeded healthy state (ids, counters and all). */
   reset: () => void;
@@ -146,6 +160,7 @@ export function createInitialState(): SentinelState {
     services,
     histories,
     clusterHistory: [],
+    clusterTrail: [],
     cluster: aggregateCluster(SEED_NOW, services, 0),
 
     containers: cloneSeedContainers(),
@@ -205,6 +220,7 @@ export const useSentinelStore = create<SentinelStore>((set) => ({
   toggleReducedMotion: () =>
     set((s) => ({ reducedMotion: !s.reducedMotion })),
   setLive: (live) => set({ live }),
+  setConnection: (connection) => set({ connection }),
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),
   reset: () => set(createInitialState()),

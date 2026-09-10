@@ -5,6 +5,7 @@ import type {
   LogEntry,
   LogLevel,
   ScenarioId,
+  Service,
   ServiceMetrics,
   Severity,
   SystemEvent,
@@ -42,6 +43,13 @@ const SCENARIOS: Record<string, ScenarioDefinition> = {
   [unknownAnomalyScenario.id]: unknownAnomalyScenario,
 };
 
+/** Ticks between coarse-trail samples: 5 s × CAPS.trail ≈ a 5-minute window. */
+const TRAIL_INTERVAL_TICKS = 5;
+
+/** Idle-event spacing in simulated ms — calm, not one per tick (SPEC §8). */
+const CALM_EVENT_MIN_MS = 4000;
+const CALM_EVENT_JITTER_MS = 2000;
+
 /** Keep only the most recent `n` items of a list. */
 function cap<T>(list: T[], n: number): T[] {
   return list.length > n ? list.slice(list.length - n) : list;
@@ -65,6 +73,10 @@ export class SimulationEngine {
   /** Simulated epoch-ms clock; advances by tickMs·timeScale each active tick. */
   private clock = 0;
   private seq = 0;
+  private ticks = 0;
+  /** Engine clock the next calm idle event is due; 0 = due immediately. */
+  private nextCalmEventAt = 0;
+  private calmIndex = 0;
 
   /** Per-service walk targets (the mean the noise reverts toward). */
   private targets: Record<string, ServiceMetrics> = {};
@@ -168,6 +180,8 @@ export class SimulationEngine {
     this.run = null;
     this.experimentId = null;
     this.recoveredSince = null;
+    this.nextCalmEventAt = 0;
+    this.calmIndex = 0;
     sentinelStore.get().reset();
     this.seedTargets();
   }
@@ -176,7 +190,13 @@ export class SimulationEngine {
 
   private tick(): void {
     if (!this.running || this.paused) return;
+
+    // A simulated telemetry outage freezes the whole simulation, which is what
+    // makes "showing last known values" literally true (SPEC §25).
+    if (sentinelStore.get().connection === "lost") return;
+
     this.clock += this.tickMs * this.timeScale;
+    this.ticks += 1;
 
     // 1) Advance the active scenario (may shift targets / statuses).
     if (this.run) {
@@ -206,7 +226,14 @@ export class SimulationEngine {
     const cluster = aggregateCluster(this.clock, services, criticalIncidents);
     const clusterHistory = pushRing(state.clusterHistory, cluster, RING_SIZE);
 
-    sentinelStore.set({ services, histories, cluster, clusterHistory, connection: "ok" });
+    sentinelStore.set({ services, histories, cluster, clusterHistory });
+
+    // 4b) Coarse trail, sampled every few ticks, backs the "vs 5 min ago" deltas.
+    if (this.ticks % TRAIL_INTERVAL_TICKS === 0) {
+      sentinelStore.set((s) => ({
+        clusterTrail: pushRing(s.clusterTrail, cluster, CAPS.trail),
+      }));
+    }
 
     // 5) Status island returns to operational 8s after recovered (SPEC §19).
     if (this.recoveredSince !== null && this.clock - this.recoveredSince >= 8000) {
@@ -218,11 +245,53 @@ export class SimulationEngine {
       });
     }
 
-    // 6) Occasional heartbeat event so the live stream feels alive when idle.
-    if (this.seq % 5 === 0 && !this.run) {
-      this.pushEvent("telemetry", "Telemetry received", { severity: "info" });
+    // 6) Calm idle chatter so the live stream breathes without spamming a line
+    //     per tick. Scenarios narrate themselves, so stay quiet during a run.
+    if (!this.run && this.clock >= this.nextCalmEventAt) {
+      this.pushCalmEvent(services);
+      this.nextCalmEventAt =
+        this.clock + CALM_EVENT_MIN_MS + Math.floor(this.rng() * CALM_EVENT_JITTER_MS);
     }
-    this.seq += 1;
+  }
+
+  /**
+   * One rotating "nothing is wrong" event: telemetry batch, health check,
+   * anomaly scan, container heartbeat (SPEC §8).
+   */
+  private pushCalmEvent(services: Service[]): void {
+    const svc = services[this.calmIndex % services.length];
+    const slot = this.calmIndex % 4;
+    this.calmIndex += 1;
+
+    switch (slot) {
+      case 0:
+        this.pushEvent(
+          "telemetry",
+          `Telemetry batch received — ${services.length} services`,
+          { severity: "info" },
+        );
+        return;
+      case 1:
+        this.pushEvent("health", `Health check passed — ${svc.id}`, {
+          severity: "ok",
+          serviceId: svc.id,
+        });
+        return;
+      case 2: {
+        const score = sentinelStore.get().anomaly.score;
+        this.pushEvent(
+          "anomaly",
+          `Anomaly scan completed — score ${score.toFixed(2)}`,
+          { severity: "info" },
+        );
+        return;
+      }
+      default:
+        this.pushEvent("info", `Container heartbeat — ${svc.containerId}`, {
+          severity: "info",
+          serviceId: svc.id,
+        });
+    }
   }
 
   private finalizeScenario(): void {
