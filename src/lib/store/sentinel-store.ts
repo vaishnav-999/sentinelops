@@ -95,6 +95,10 @@ export interface SentinelState {
 
   /* Autonomous workflow surface */
   islandState: IslandState;
+  /** Engine clock when the island left operational; null while healthy. */
+  islandStartedAt: number | null;
+  /** Engine clock of the last island state change. */
+  islandChangedAt: number;
   scenarioPhase: ScenarioPhase;
   activeScenario: ScenarioId | null;
 
@@ -159,6 +163,8 @@ export function createInitialState(): SentinelState {
     detectors: initialDetectors(),
 
     islandState: "operational",
+    islandStartedAt: null,
+    islandChangedAt: SEED_NOW,
     scenarioPhase: "idle",
     activeScenario: null,
 

@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@/lib/types";
+import type { EnvironmentId, TimeRange } from "@/lib/types";
 
 /**
  * Deterministic anchor for all seed timestamps.
@@ -39,3 +39,12 @@ export const ENVIRONMENTS: EnvironmentMeta[] = [
     cluster: "sentinel-dev-cluster",
   },
 ];
+
+/** Seeded operator shown in the shell profile. */
+export const OPERATOR = {
+  name: "Maya Chen",
+  role: "On-call operator",
+  initials: "MC",
+} as const;
+
+export const TIME_RANGES: TimeRange[] = ["15m", "1h", "6h", "24h", "7d"];

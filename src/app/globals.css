@@ -132,6 +132,23 @@
   html {
     @apply font-sans;
     color-scheme: dark;
+    scrollbar-width: thin;
+    scrollbar-color: #1c2635 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #1c2635;
+    border-radius: 4px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #2a384c;
   }
   body {
     /* Body is 14px / weight 400, primary text on the page surface. */
@@ -139,6 +156,12 @@
     font-size: var(--text-sm);
     line-height: var(--text-sm--line-height);
     font-weight: 400;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pulse {
+      animation: none;
+    }
   }
 }
 

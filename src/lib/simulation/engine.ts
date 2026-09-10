@@ -72,6 +72,8 @@ export class SimulationEngine {
   private run: ScenarioRun | null = null;
   private runStartClock = 0;
   private experimentId: string | null = null;
+  /** Engine clock when island entered `recovered`; cleared on other states. */
+  private recoveredSince: number | null = null;
 
   constructor(opts: EngineOptions = {}) {
     this.tickMs = opts.tickMs ?? 1000;
@@ -83,11 +85,15 @@ export class SimulationEngine {
   /* ----------------------------- lifecycle ----------------------------- */
 
   start(): void {
-    if (this.running) return; // idempotent — guards StrictMode double-mount
-    this.running = true;
+    // Always unpause and mark LIVE. The early-return used to skip this when
+    // the singleton was already `running` (HMR / StrictMode), which left a
+    // previously paused engine showing PAUSED on the next first paint.
     this.paused = false;
-    this.clock = Date.now(); // client-only; safe after mount
-    this.timer = setInterval(() => this.tick(), this.tickMs);
+    if (!this.running) {
+      this.running = true;
+      this.clock = Date.now(); // client-only; safe after mount
+      this.timer = setInterval(() => this.tick(), this.tickMs);
+    }
     sentinelStore.set({ live: true, connection: "ok" });
   }
 
@@ -161,6 +167,7 @@ export class SimulationEngine {
     if (this.run) this.run.cancel();
     this.run = null;
     this.experimentId = null;
+    this.recoveredSince = null;
     sentinelStore.get().reset();
     this.seedTargets();
   }
@@ -201,7 +208,17 @@ export class SimulationEngine {
 
     sentinelStore.set({ services, histories, cluster, clusterHistory, connection: "ok" });
 
-    // 5) Occasional heartbeat event so the live stream feels alive when idle.
+    // 5) Status island returns to operational 8s after recovered (SPEC §19).
+    if (this.recoveredSince !== null && this.clock - this.recoveredSince >= 8000) {
+      this.recoveredSince = null;
+      sentinelStore.set({
+        islandState: "operational",
+        islandStartedAt: null,
+        islandChangedAt: this.clock,
+      });
+    }
+
+    // 6) Occasional heartbeat event so the live stream feels alive when idle.
     if (this.seq % 5 === 0 && !this.run) {
       this.pushEvent("telemetry", "Telemetry received", { severity: "info" });
     }
@@ -297,7 +314,24 @@ export class SimulationEngine {
     return {
       now: () => this.clock,
       setPhase: (scenarioPhase) => sentinelStore.set({ scenarioPhase }),
-      setIsland: (islandState) => sentinelStore.set({ islandState }),
+      setIsland: (islandState) => {
+        const prev = sentinelStore.get();
+        const now = this.clock;
+        const leavingHealthy =
+          prev.islandState === "operational" && islandState !== "operational";
+        const islandStartedAt =
+          islandState === "operational"
+            ? null
+            : leavingHealthy || prev.islandStartedAt === null
+              ? now
+              : prev.islandStartedAt;
+        this.recoveredSince = islandState === "recovered" ? now : null;
+        sentinelStore.set({
+          islandState,
+          islandStartedAt,
+          islandChangedAt: now,
+        });
+      },
       setServiceTarget: (serviceId, patch) => {
         const base = this.targets[serviceId] ??
           sentinelStore.get().services.find((s) => s.id === serviceId)?.baseline;

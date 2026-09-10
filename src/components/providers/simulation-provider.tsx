@@ -13,6 +13,7 @@ import { engine } from "@/lib/simulation/engine";
  */
 export function SimulationProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
+    // Boot (or resume) the singleton so first paint is LIVE, not a stale pause.
     engine.start();
   }, []);
 
