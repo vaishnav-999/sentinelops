@@ -6,9 +6,11 @@ import type { ScenarioDefinition } from "../scenario-runner";
  * Every offset below is measured from the moment the fault lands (the engine
  * owns the 3-2-1 countdown that precedes it), and `ctx.now()` reports the
  * step's *scheduled* time, so the two numbers the whole demo is judged on come
- * out exact no matter how coarsely the engine ticks:
+ * out exact no matter how coarsely the engine ticks. The run's own timing is
+ * minted by the engine (simulation/timing.ts) and the script offsets below are
+ * warped onto it, so never quote a duration here — read `ctx.timing`.
  *
- *   anomaly detected at +8.2 s   ·   detected → resolved in 18.4 s
+ *   nominal: anomaly detected at +8.2 s · detected → resolved in 18.4 s
  *
  * The static threshold rule is deliberately NOT scripted here: the engine
  * evaluates `memory > 90%` against live telemetry each tick, so it fires later
@@ -20,11 +22,7 @@ const TARGET = "payment-worker";
 const POLICY = "MEM-LEAK-01";
 const ACTION = "restart_container";
 
-/** Detection → resolution, seconds. Kept in one place; the copy quotes it. */
-const RECOVERY_SEC = 18.4;
-
-/** Metrics captured when the incident opens, for the before/after comparison. */
-const BEFORE = { memory: 91, latencyP95: 700, errorRate: 6.2 };
+/** Walk targets once the restart has reclaimed the heap. */
 const AFTER = { memory: 43, latencyP95: 171, errorRate: 0.4 };
 
 /** The single incident this run opens; captured so later steps can update it. */
@@ -39,6 +37,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
   threshold: 90,
   thresholdLabel: "memory > 90%",
   expected: "auto_heal",
+  nominal: { detectAtMs: 8200, endAtMs: 26600 },
   steps: [
     {
       atMs: 0,
@@ -107,7 +106,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
           rootCause: "Progressive memory growth",
           action: "Restart container",
           anomalyScore: 0.94,
-          before: BEFORE,
+          before: ctx.snapshot(TARGET),
         });
 
         ctx.pushTerminal("anomaly detected", "warn");
@@ -149,6 +148,8 @@ export const memoryLeakScenario: ScenarioDefinition = {
       run: (ctx) => {
         ctx.setServiceMetrics(TARGET, { memory: 91, latencyP95: 700, errorRate: 6.2 });
         ctx.setServiceStatus(TARGET, "critical");
+        // The comparison quotes what the run actually reached, not a constant.
+        if (incidentId) ctx.updateIncident(incidentId, { before: ctx.snapshot(TARGET) });
         ctx.pushEvent("telemetry", "payment-worker critical — memory 91%", {
           severity: "crit",
           serviceId: TARGET,
@@ -162,12 +163,16 @@ export const memoryLeakScenario: ScenarioDefinition = {
       run: (ctx) => {
         // Stage 2: the Diagnoser matches feature deviation against known fault
         // signatures. This is a signature match, never a "confidence".
-        ctx.setDiagnosis({
+        const diagnosis = {
           signature: "MEM-LEAK",
           match: 0.96,
           faultType: "memory_leak",
           summary: "Feature deviation matches the memory-leak signature.",
-        });
+        };
+        ctx.setDiagnosis(diagnosis);
+        // The incident keeps its own copy: the live diagnosis decays, the
+        // record must not.
+        if (incidentId) ctx.updateIncident(incidentId, { diagnosis, policyId: POLICY });
         ctx.pushTerminal("classification: memory_leak", "info");
         ctx.pushTerminal("signature match: 0.96", "info");
         ctx.runConsole({ diagnosisNote: "memory_leak · signature match 96%" });
@@ -188,6 +193,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
       label: "ramp-peak",
       run: (ctx) => {
         ctx.setServiceMetrics(TARGET, { memory: 96, latencyP95: 884, errorRate: 8.7 });
+        if (incidentId) ctx.updateIncident(incidentId, { before: ctx.snapshot(TARGET) });
       },
     },
     {
@@ -289,14 +295,14 @@ export const memoryLeakScenario: ScenarioDefinition = {
         ctx.resetServiceTarget(TARGET);
         ctx.step("resolved");
         ctx.setIsland("recovered");
-        ctx.runConsole({ recoverySec: RECOVERY_SEC });
+        ctx.runConsole({ recoverySec: ctx.timing().recoverySec });
         if (incidentId) {
           ctx.updateIncident(incidentId, {
             status: "resolved",
             auto: true,
             resolvedAt: ctx.now(),
-            recoverySec: RECOVERY_SEC,
-            after: AFTER,
+            recoverySec: ctx.timing().recoverySec,
+            after: ctx.snapshot(TARGET),
           });
           ctx.completeStage(incidentId, "resolved", "Auto-healed.");
         }
@@ -309,7 +315,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
         ctx.notify(
           "success",
           "Auto-recovery completed",
-          `payment-worker returned to normal in ${RECOVERY_SEC}s.`,
+          `payment-worker returned to normal in ${ctx.timing().recoverySec}s.`,
         );
       },
     },

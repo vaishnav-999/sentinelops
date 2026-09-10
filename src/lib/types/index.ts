@@ -312,6 +312,12 @@ export interface Incident {
   stages: StageRecord[];
   anomalyScore?: number;
   diagnosis?: Diagnosis;
+  /**
+   * The remediation policy the run selected. Recorded on the incident rather
+   * than re-derived in the UI, so the audit log names the policy that actually
+   * ran even after the live diagnosis has decayed.
+   */
+  policyId?: string;
   before?: Partial<ServiceMetrics>;
   after?: Partial<ServiceMetrics>;
   /** True when resolved autonomously, false when escalated to an operator. */

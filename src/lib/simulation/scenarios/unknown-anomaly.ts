@@ -30,6 +30,7 @@ export const unknownAnomalyScenario: ScenarioDefinition = {
   threshold: 85,
   thresholdLabel: "cpu > 85%",
   expected: "escalate",
+  nominal: { detectAtMs: 7500, endAtMs: 14500 },
   steps: [
     {
       atMs: 0,
@@ -101,7 +102,7 @@ export const unknownAnomalyScenario: ScenarioDefinition = {
           rootCause: "Unknown — no signature matched",
           action: "Escalate to operator",
           anomalyScore: 0.79,
-          before: { cpu: 79, latencyP95: 338, errorRate: 1.9 },
+          before: ctx.snapshot(TARGET),
         });
 
         ctx.pushTerminal("anomaly detected", "warn");
@@ -131,12 +132,15 @@ export const unknownAnomalyScenario: ScenarioDefinition = {
       atMs: 12000,
       label: "no-signature",
       run: (ctx) => {
-        ctx.setDiagnosis({
+        const diagnosis = {
           signature: "UNKNOWN",
           match: MATCH,
           faultType: "unknown",
           summary: "No known fault signature matched the deviation.",
-        });
+        };
+        ctx.setDiagnosis(diagnosis);
+        // No policyId: nothing matched, which is exactly why this escalates.
+        if (incidentId) ctx.updateIncident(incidentId, { diagnosis });
         ctx.pushTerminal("classification: unknown", "warn");
         ctx.pushTerminal(`signature match: ${MATCH.toFixed(2)}`, "warn");
         ctx.runConsole({

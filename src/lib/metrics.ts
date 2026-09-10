@@ -69,6 +69,25 @@ export function formatWindow(seconds: number): string {
   return `${Math.round(seconds)}s`;
 }
 
+/** "just now" / "4m ago" / "3h ago" / "2d ago" from two engine clocks. */
+export function formatAgo(t: number, now: number): string {
+  const sec = Math.max(0, Math.floor((now - t) / 1000));
+  if (sec < 45) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${Math.max(1, min)}m ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Stage-to-stage gap: "+2.8s" under a minute, "+1m 04s" over it. */
+export function formatDurationMs(ms: number): string {
+  const sec = Math.max(0, ms) / 1000;
+  if (sec < 60) return `+${sec.toFixed(1)}s`;
+  const m = Math.floor(sec / 60);
+  return `+${m}m ${String(Math.round(sec - m * 60)).padStart(2, "0")}s`;
+}
+
 /** Whole hours/days of uptime from a container start time. */
 export function formatUptimeSince(startedAt: number, now: number): string {
   const hours = Math.max(0, Math.floor((now - startedAt) / 3_600_000));

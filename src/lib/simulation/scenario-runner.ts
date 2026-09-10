@@ -18,6 +18,7 @@ import type {
   ServiceStatus,
   TerminalLevel,
 } from "@/lib/types";
+import type { RunTiming, TimeWarp } from "./timing";
 
 /**
  * A scenario is a declarative timeline of steps. Each step fires once, when the
@@ -52,6 +53,12 @@ export interface ScenarioDefinition {
   thresholdLabel: string;
   /** What the run is expected to end in — drives the final stepper node. */
   expected: "auto_heal" | "escalate";
+  /**
+   * The script's own detection / end offsets, in ms from injection. The engine
+   * time-warps the timeline so a run lands on its minted `RunTiming` (see
+   * simulation/timing.ts) — these say which two points to pin it to.
+   */
+  nominal: { detectAtMs: number; endAtMs: number };
   steps: ScenarioStep[];
 }
 
@@ -75,10 +82,14 @@ export type NotifyLevel = "info" | "success" | "warning" | "error";
  */
 export interface ScenarioContext {
   /**
+   * This run's minted timing. Never quote a hardcoded duration in a scenario:
+   * read `ctx.timing().recoverySec` so the copy and the table always agree.
+   */
+  timing(): RunTiming;
+  /**
    * Simulated wall-clock, epoch ms. While a step is executing this returns the
-   * step's *scheduled* time, not the tick time, so choreographed durations
-   * (detection at +8.2 s, recovery in 18.4 s) come out exact regardless of how
-   * coarsely the engine happens to be ticking.
+   * step's *scheduled* time, not the tick time, so the run's minted durations
+   * come out exact regardless of how coarsely the engine happens to be ticking.
    */
   now(): number;
   setPhase(phase: ScenarioPhase): void;
@@ -101,6 +112,12 @@ export interface ScenarioContext {
    * should see; the noise still wobbles around it between stages.
    */
   setServiceMetrics(serviceId: string, patch: Partial<ServiceMetrics>): void;
+  /**
+   * The service's live metrics right now, rounded for display. Used for the
+   * incident before/after comparison so those figures are what the run
+   * actually produced, not constants copied out of the script.
+   */
+  snapshot(serviceId: string): Partial<ServiceMetrics>;
   /** Reset a service's walk target back to its healthy baseline. */
   resetServiceTarget(serviceId: string): void;
   setServiceStatus(serviceId: string, status: ServiceStatus): void;
@@ -139,13 +156,26 @@ export interface ScenarioContext {
 export class ScenarioRun {
   readonly def: ScenarioDefinition;
   private readonly ctx: ScenarioContext;
+  private readonly warp: TimeWarp;
   private index = 0;
   private cancelled = false;
 
-  constructor(def: ScenarioDefinition, ctx: ScenarioContext) {
+  constructor(def: ScenarioDefinition, ctx: ScenarioContext, warp: TimeWarp) {
     // Steps must be in ascending time order; sort defensively.
     this.def = { ...def, steps: [...def.steps].sort((a, b) => a.atMs - b.atMs) };
     this.ctx = ctx;
+    this.warp = warp;
+  }
+
+  /**
+   * Script offset → this run's offset. Piecewise linear about the detection
+   * step, so detection lands on `timing.mlDetectSec` and the detection → end
+   * stretch scales with `timing.recoverySec`. Monotonic, so step order holds.
+   */
+  at(atMs: number): number {
+    const { detectAtMs } = this.def.nominal;
+    if (atMs <= detectAtMs) return atMs * this.warp.detect;
+    return detectAtMs * this.warp.detect + (atMs - detectAtMs) * this.warp.recover;
   }
 
   get id(): ScenarioId {
@@ -161,12 +191,12 @@ export class ScenarioRun {
     if (this.cancelled) return true;
     while (
       this.index < this.def.steps.length &&
-      this.def.steps[this.index].atMs <= elapsedMs
+      this.at(this.def.steps[this.index].atMs) <= elapsedMs
     ) {
       const step = this.def.steps[this.index];
       this.index += 1;
       // Pin `now()` to the step's scheduled time for the duration of the step.
-      this.ctx.mark(step.atMs);
+      this.ctx.mark(this.at(step.atMs));
       try {
         step.run(this.ctx);
       } finally {

@@ -84,18 +84,20 @@ function ThemeMenu() {
         </Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="font-normal">
+        {/* Plain header, not a GroupLabel: base-ui group parts throw outside a
+            Menu.Group / Menu.RadioGroup, which takes the whole menu down. */}
+        <div className="px-1.5 py-1">
           <div className="text-sm text-text">{OPERATOR.name}</div>
           <div className="text-xs text-muted">{OPERATOR.role}</div>
-        </DropdownMenuLabel>
+        </div>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel>Theme</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={mounted ? (theme ?? "dark") : "dark"}
           onValueChange={(v) => {
             if (v) setTheme(v);
           }}
         >
+          <DropdownMenuLabel>Theme</DropdownMenuLabel>
           <DropdownMenuRadioItem value="dark" className="gap-2">
             <Moon className="size-4 text-muted" strokeWidth={1.75} />
             Dark

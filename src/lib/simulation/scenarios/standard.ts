@@ -11,7 +11,8 @@ import type { ScenarioDefinition, ScenarioMetric, ScenarioStep } from "../scenar
  * the two the demo is built around and they deviate from this shape.
  *
  * Offsets are ms from injection (the engine owns the 3-2-1 countdown), giving
- * a ~29 s run end to end.
+ * a ~29 s run end to end. They are nominal: the engine warps them onto the
+ * run's minted timing, so quoted durations come from `ctx.timing`.
  */
 
 const T = {
@@ -31,9 +32,6 @@ const T = {
   decay: 22000,
   end: 26000,
 } as const;
-
-/** Detection → resolution for every standard run, seconds. */
-const RECOVERY_SEC = (T.resolve - T.detect) / 1000;
 
 export interface StandardScenarioConfig {
   id: ScenarioDefinition["id"];
@@ -151,7 +149,7 @@ export function buildStandardScenario(
           rootCause: cfg.rootCause,
           action: cfg.actionLabel,
           anomalyScore: cfg.anomalyScore,
-          before: cfg.ramp[2],
+          before: ctx.snapshot(cfg.target),
         });
 
         ctx.pushTerminal("anomaly detected", "warn");
@@ -181,12 +179,17 @@ export function buildStandardScenario(
       atMs: T.diagnose,
       label: "diagnosis-and-policy",
       run: (ctx) => {
-        ctx.setDiagnosis({
+        const diagnosis = {
           signature: cfg.signature,
           match: cfg.match,
           faultType: cfg.faultType,
           summary: cfg.diagnosisSummary,
-        });
+        };
+        ctx.setDiagnosis(diagnosis);
+        // The incident keeps its own copy: the live diagnosis decays.
+        if (incidentId) {
+          ctx.updateIncident(incidentId, { diagnosis, policyId: cfg.policyId });
+        }
         ctx.pushTerminal(`classification: ${cfg.faultType}`, "info");
         ctx.pushTerminal(`signature match: ${cfg.match.toFixed(2)}`, "info");
         ctx.runConsole({
@@ -289,14 +292,14 @@ export function buildStandardScenario(
         ctx.resetServiceTarget(cfg.target);
         ctx.step("resolved");
         ctx.setIsland("recovered");
-        ctx.runConsole({ recoverySec: RECOVERY_SEC });
+        ctx.runConsole({ recoverySec: ctx.timing().recoverySec });
         if (incidentId) {
           ctx.updateIncident(incidentId, {
             status: "resolved",
             auto: true,
             resolvedAt: ctx.now(),
-            recoverySec: RECOVERY_SEC,
-            after: cfg.after,
+            recoverySec: ctx.timing().recoverySec,
+            after: ctx.snapshot(cfg.target),
           });
           ctx.completeStage(incidentId, "resolved", "Auto-healed.");
         }
@@ -343,6 +346,7 @@ export function buildStandardScenario(
     threshold: cfg.threshold,
     thresholdLabel: cfg.thresholdLabel,
     expected: "auto_heal",
+    nominal: { detectAtMs: T.detect, endAtMs: T.resolve },
     steps,
   };
 }

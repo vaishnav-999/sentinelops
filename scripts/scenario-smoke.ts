@@ -5,7 +5,8 @@
  * compressed time scale and asserts the invariants the demo depends on:
  *
  *   1. Memory leak five times back to back — every run ends resolved, every
- *      service healthy, the island back to operational.
+ *      service healthy, the island back to operational. Run #1 after a reset
+ *      reproduces the slide numbers exactly; runs #2+ vary inside their ranges.
  *   2. Reset in the middle of remediation — clean healthy state, no incident
  *      stuck mid-stage.
  *   3. Unknown anomaly — ends escalated, and nothing was restarted.
@@ -17,7 +18,15 @@
  */
 import { engine } from "../src/lib/simulation/engine";
 import { sentinelStore } from "../src/lib/store/sentinel-store";
+import { BASELINE_TIMING, TIMING_RANGE } from "../src/lib/simulation/timing";
 import type { Incident, ScenarioId } from "../src/lib/types";
+
+/**
+ * The threshold rule is evaluated on the engine tick (1 simulated second), so
+ * its hold-down can overshoot by up to one tick. Detection and recovery are
+ * choreographed and need no slack.
+ */
+const TICK_SLACK_SEC = 1.1;
 
 /** 4 real ms per simulated second: a ~40 s run finishes in ~160 ms. */
 const TICK_MS = 4;
@@ -25,6 +34,14 @@ const TIME_SCALE = 250;
 
 let failures = 0;
 let checks = 0;
+
+function inRange(
+  value: number | null | undefined,
+  [min, max]: readonly [number, number],
+  slack = 0,
+): boolean {
+  return value !== null && value !== undefined && value >= min && value <= max + slack;
+}
 
 function check(ok: boolean, label: string, detail?: unknown): void {
   checks += 1;
@@ -103,6 +120,8 @@ async function main(): Promise<void> {
   /* -------- 1. memory leak, five times back to back -------------------- */
   console.log("\n1. Memory leak × 5 back to back");
   const incidentIds: string[] = [];
+  const detections: number[] = [];
+  const recoveries: number[] = [];
   for (let i = 1; i <= 5; i += 1) {
     await runToCompletion("memory-leak");
     const s = state();
@@ -114,14 +133,42 @@ async function main(): Promise<void> {
       s.scenarioPhase,
     );
     check(allHealthy(), `run ${i} left every service healthy`, s.services.map((x) => `${x.id}:${x.status}`));
-    check(run?.recoverySec === 18.4, `run ${i} recovered in 18.4s`, run?.recoverySec);
-    check(run?.mlDetectedSec === 8.2, `run ${i} detected at +8.2s`, run?.mlDetectedSec);
+    if (i === 1) {
+      // The first run after a reset is the one the slides quote.
+      check(
+        run?.mlDetectedSec === BASELINE_TIMING.mlDetectSec,
+        `run 1 detected at exactly +${BASELINE_TIMING.mlDetectSec}s`,
+        run?.mlDetectedSec,
+      );
+      check(
+        run?.recoverySec === BASELINE_TIMING.recoverySec,
+        `run 1 recovered in exactly ${BASELINE_TIMING.recoverySec}s`,
+        run?.recoverySec,
+      );
+    }
     check(
-      run?.thresholdDetectedSec !== null &&
-        (run?.thresholdDetectedSec ?? 0) > (run?.mlDetectedSec ?? 0),
-      `run ${i} threshold rule fired after the anomaly detector`,
-      run?.thresholdDetectedSec,
+      inRange(run?.mlDetectedSec, TIMING_RANGE.mlDetectSec),
+      `run ${i} detected inside ${TIMING_RANGE.mlDetectSec.join("–")}s`,
+      run?.mlDetectedSec,
     );
+    check(
+      inRange(run?.recoverySec, TIMING_RANGE.recoverySec),
+      `run ${i} recovered inside ${TIMING_RANGE.recoverySec.join("–")}s`,
+      run?.recoverySec,
+    );
+    check(
+      inRange(
+        run === null || run.thresholdDetectedSec === null || run.mlDetectedSec === null
+          ? null
+          : Math.round((run.thresholdDetectedSec - run.mlDetectedSec) * 10) / 10,
+        TIMING_RANGE.thresholdDelaySec,
+        TICK_SLACK_SEC,
+      ),
+      `run ${i} threshold rule confirmed ${TIMING_RANGE.thresholdDelaySec.join("–")}s after the detector`,
+      [run?.mlDetectedSec, run?.thresholdDetectedSec],
+    );
+    detections.push(run?.mlDetectedSec ?? 0);
+    recoveries.push(run?.recoverySec ?? 0);
 
     const incident = s.incidents.find((x) => x.id === run?.incidentId);
     check(incident?.status === "resolved", `run ${i} incident resolved`, incident?.status);
@@ -140,6 +187,17 @@ async function main(): Promise<void> {
     new Set(incidentIds).size === incidentIds.length,
     "no duplicate incident ids across runs",
     incidentIds,
+  );
+  // The whole point of the per-run draw: the table must not look hardcoded.
+  check(
+    new Set(detections.slice(1)).size > 1,
+    "detection times vary across runs 2–5",
+    detections,
+  );
+  check(
+    new Set(recoveries.slice(1)).size > 1,
+    "recovery times vary across runs 2–5",
+    recoveries,
   );
   check(
     state().experimentRuns.length === 9,

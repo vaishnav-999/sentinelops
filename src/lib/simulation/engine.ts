@@ -22,8 +22,15 @@ import type {
   TerminalLine,
 } from "@/lib/types";
 import { CAPS, sentinelStore } from "@/lib/store/sentinel-store";
-import { NEXT_INCIDENT_SEQ, RING_SIZE } from "@/lib/mock-data";
-import { createRng, type Rng } from "./noise";
+import { NEXT_INCIDENT_SEQ, RING_SIZE, SEED_NOW } from "@/lib/mock-data";
+import { createRng, round, type Rng } from "./noise";
+import {
+  jitteredTiming,
+  nominalTiming,
+  scenarioTiming,
+  warpFactors,
+  type RunTiming,
+} from "./timing";
 import {
   aggregateCluster,
   pushRing,
@@ -163,6 +170,18 @@ export class SimulationEngine {
   private targets: Record<string, ServiceMetrics> = {};
 
   private run: ScenarioRun | null = null;
+  /** The timing this run was minted with; every quoted duration reads it. */
+  private runTiming: RunTiming = nominalTiming();
+  /**
+   * Runs since page load / Reset Demo. Run #1 uses the baseline timing exactly
+   * so the walkthrough matches the slides; later runs are drawn.
+   */
+  private runsSinceReset = 0;
+  /**
+   * Engine clock before which the static threshold rule may not fire, even
+   * with the metric over the line: its evaluation interval + hold-down.
+   */
+  private thresholdArmAt = 0;
   /** Engine clock the fault lands — the countdown runs before this. */
   private runStartClock = 0;
   private injected = false;
@@ -196,6 +215,7 @@ export class SimulationEngine {
     if (!this.running) {
       this.running = true;
       this.clock = Date.now(); // client-only; safe after mount
+      this.rebaseSeedIncidents();
       this.timer = setInterval(() => this.tick(), this.tickMs);
     }
     sentinelStore.set({ live: true, connection: "ok" });
@@ -256,10 +276,20 @@ export class SimulationEngine {
     // Cancel any in-flight run first: re-running or resetting mid-run is clean.
     this.cancelRun("cancelled");
 
-    this.run = new ScenarioRun(def, this.ctx);
+    // Run #1 after load/reset is the slide-exact one; the rest vary.
+    const drawn =
+      this.runsSinceReset === 0 ? nominalTiming() : jitteredTiming(this.rng);
+    this.runsSinceReset += 1;
+    const warp = warpFactors(drawn);
+    this.runTiming = scenarioTiming(def.nominal, warp, drawn.thresholdDelaySec);
+
+    this.run = new ScenarioRun(def, this.ctx, warp);
     // The fault lands after the 3-2-1 countdown; elapsed time is measured from
     // injection, so every choreographed offset is countdown-independent.
     this.runStartClock = this.clock + COUNTDOWN_MS;
+    this.thresholdArmAt =
+      this.runStartClock +
+      (this.runTiming.mlDetectSec + this.runTiming.thresholdDelaySec) * 1000;
     this.injected = false;
 
     const experiment: ExperimentRun = {
@@ -339,10 +369,40 @@ export class SimulationEngine {
     this.seq = 0;
     this.incidentSeq = NEXT_INCIDENT_SEQ;
     this.stepAtMs = null;
+    this.runsSinceReset = 0;
+    this.runTiming = nominalTiming();
 
     sentinelStore.get().reset();
     sentinelStore.set({ experimentRuns: runs, live: true, connection: "ok" });
+    this.rebaseSeedIncidents();
     this.seedTargets();
+  }
+
+  /**
+   * Seed timestamps hang off the fixed `SEED_NOW` anchor so the server and the
+   * client render the same HTML. Once the engine has a real clock, shift the
+   * historical incidents onto it, so "3 hours ago" stays true on any date.
+   * Idempotent: it only ever touches incidents that came from the seed.
+   */
+  private rebaseSeedIncidents(): void {
+    if (!this.running) return; // no real clock yet — nothing to rebase onto
+    const shift = this.clock - SEED_NOW;
+    if (shift === 0) return;
+    sentinelStore.set((s) => ({
+      incidents: s.incidents.map((inc) =>
+        inc.scenarioId !== undefined
+          ? inc
+          : {
+              ...inc,
+              detectedAt: inc.detectedAt + shift,
+              resolvedAt:
+                inc.resolvedAt === undefined ? undefined : inc.resolvedAt + shift,
+              stages: inc.stages.map((st) =>
+                st.at === undefined ? st : { ...st, at: st.at + shift },
+              ),
+            },
+      ),
+    }));
   }
 
   /** Cancel the in-flight run (if any) and close out its experiment row. */
@@ -478,6 +538,12 @@ export class SimulationEngine {
       .get()
       .detectors.find((d) => d.kind === "threshold");
     if (!detector || detector.fired) return;
+
+    // A static rule is not instantaneous: it evaluates on an interval and holds
+    // the condition down before alerting. `thresholdArmAt` is that wait, so the
+    // rule confirms a few seconds behind the detector — the comparison the
+    // research question is about — while still needing a genuine breach.
+    if (this.clock < this.thresholdArmAt) return;
 
     const svc = services.find((s) => s.id === def.target);
     if (!svc || svc.metrics[def.metric] <= def.threshold) return;
@@ -696,6 +762,7 @@ export class SimulationEngine {
   /** Bind the scenario surface to this engine + the store. */
   private buildContext(): ScenarioContext {
     return {
+      timing: () => this.runTiming,
       now: () => this.stepNow(),
       mark: (atMs) => {
         this.stepAtMs = atMs;
@@ -756,6 +823,18 @@ export class SimulationEngine {
             x.id === serviceId ? { ...x, metrics: { ...x.metrics, ...patch } } : x,
           ),
         }));
+      },
+      snapshot: (serviceId) => {
+        const m = sentinelStore.get().services.find((s) => s.id === serviceId)
+          ?.metrics;
+        if (!m) return {};
+        return {
+          cpu: round(m.cpu),
+          memory: round(m.memory),
+          latencyP95: Math.round(m.latencyP95),
+          errorRate: round(m.errorRate, 2),
+          ...(m.hitRate === undefined ? {} : { hitRate: round(m.hitRate) }),
+        };
       },
       resetServiceTarget: (serviceId) => {
         const svc = sentinelStore.get().services.find((s) => s.id === serviceId);
