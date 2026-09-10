@@ -45,15 +45,28 @@ src/lib/api            SentinelClient interface + mock and http clients
 - No Math.random(), Date.now() or locale date formatting during server render. Client-only init.
 - No hardcoded metric numbers inside JSX; data comes from typed store/mock data.
 
-## Design rules
-Use tokens, never raw hex in components:
-bg #07090D | bg-2 #0A0D12 | card #0D1117 | elevated #111722 | border #1C2635
-text #F5F7FA | text-2 #93A4B8 | muted #66758A
-brand/live cyan #31D7FF | ok #39E58C | warn #FFC857 | crit #FF5D73 | ai/anomaly #9D7BFF
-- Color is semantic only. No gradient card backgrounds. Radius max 12px. No card-in-card-in-card.
-- Geist Sans for UI. Geist Mono + tabular-nums for metrics, ids, timestamps, logs, scores.
-- Data-dense product feel (Linear, Vercel, Datadog). Not an admin template. No emojis as icons.
-- Animate on state change, not forever. Respect prefers-reduced-motion and the store reducedMotion flag.
+## Design system (locked — overrides anything else)
+- Type scale only 12/14/16/20/24/32px. Body 14. Labels 12px muted, sentence case. Weights 400/500;
+  600 only for page titles. Metric values: Geist Mono, 500, tabular-nums.
+- Spacing on a 4px grid only: panel padding 16, gap between panels 12, section gap 24.
+- Radius: 6px controls, 8px panels. Pills only for status badges.
+- Surfaces: page #07090D, panel #0D1117, raised #111722. 1px borders #1C2635.
+  No shadows except popovers, dialogs, sheets.
+- Color roles: cyan #31D7FF only for primary action, focus ring, LIVE indicator, selected chart series.
+  Status colors (ok #39E58C, warn #FFC857, crit #FF5D73) only as text, dots, 2px rails, chart lines;
+  badges = ~12% tint background + full-color text. Purple #9D7BFF only for ML/anomaly data.
+- Text: #F5F7FA primary, #93A4B8 secondary, #66758A muted.
+- Icons: lucide only, 16px, stroke 1.75, muted. Not every label gets an icon. No emojis.
+- Motion: 150–200ms ease-out, no springs/bounce, only on state change. Continuous motion only for
+  the LIVE dot and non-healthy status indicators. Respect prefers-reduced-motion.
+- Charts: exact palette; muted small axes; horizontal gridlines only, low opacity; 1.5px strokes;
+  no dots on lines; direct labels instead of legends.
+- Forbidden: glow (except non-healthy status dots), blur (except top bar), gradients, gradient text,
+  aurora/shader/animated backgrounds, animated or shimmering borders, spotlight hovers, 3D cards,
+  cards inside cards, tinted icon squares on every card, marketing copy, suspiciously round numbers.
+- Maximum one level of container; use dividers and section headers instead of nesting.
+- Only two visually special elements: the Sentinel Status Island and the Chaos Lab run console.
+- Density over whitespace. Must look like a shipped observability product, not a template.
 - Desktop first: perfect at 1440x900 and 1920x1080. No horizontal overflow at 375px.
 
 ## Academic honesty (non-negotiable)
