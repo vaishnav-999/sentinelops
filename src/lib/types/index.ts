@@ -386,6 +386,7 @@ export type ScenarioPhase =
   | "injecting"
   | "detected"
   | "diagnosing"
+  | "policy_check"
   | "remediating"
   | "verifying"
   | "resolved"
@@ -405,6 +406,7 @@ export type ExperimentOutcome =
   | "running"
   | "auto_healed"
   | "escalated"
+  | "cancelled"
   | "failed";
 
 /**
@@ -421,6 +423,76 @@ export interface ExperimentRun {
   mlDetectedAt: number | null;
   remediatedAt: number | null;
   outcome: ExperimentOutcome;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chaos Lab run console                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The phase stepper shown in the Chaos Lab run console. One id per
+ * `ScenarioPhase` that a run can actually reach, in display order. A run ends
+ * on either `resolved` or `escalated`, never both.
+ */
+export type RunStepId =
+  | "injected"
+  | "detected"
+  | "analyzing"
+  | "policy_check"
+  | "remediating"
+  | "verifying"
+  | "resolved"
+  | "escalated";
+
+export interface RunStepRecord {
+  id: RunStepId;
+  /** Engine clock the step was entered, or null while still pending. */
+  at: number | null;
+}
+
+export type ChaosRunOutcome =
+  | "running"
+  | "auto_healed"
+  | "escalated"
+  | "cancelled";
+
+/**
+ * Live state of the Chaos Lab run console. Owned by the engine, mirrored into
+ * the store so the console keeps rendering after the run finishes (and so a
+ * run started on /chaos-lab stays visible when you navigate away and back).
+ */
+export interface ChaosRunState {
+  /** Matches the ExperimentRun id, so the table and the console agree. */
+  runId: string;
+  scenarioId: ScenarioId;
+  title: string;
+  target: string;
+  /** The metric the console charts, with its threshold line. */
+  metric: "cpu" | "memory" | "latencyP95" | "errorRate";
+  threshold: number;
+  thresholdLabel: string;
+  /** Engine clock the run was requested — the start of the 3-2-1 countdown. */
+  requestedAt: number;
+  /** Engine clock the fault was injected; null while still counting down. */
+  injectedAt: number | null;
+  /** 3 → 2 → 1 during the countdown, null once injected. */
+  countdown: number | null;
+  steps: RunStepRecord[];
+  current: RunStepId | null;
+  incidentId: string | null;
+  diagnosisNote: string | null;
+  policyNote: string | null;
+  healthChecks: string[];
+  /** Remediation action taken, e.g. "restart_container". */
+  action: string | null;
+  outcome: ChaosRunOutcome;
+  finishedAt: number | null;
+  /** Seconds after injection the anomaly detector fired. */
+  mlDetectedSec: number | null;
+  /** Seconds after injection the static threshold rule fired. */
+  thresholdDetectedSec: number | null;
+  /** Detection → resolution, seconds. */
+  recoverySec: number | null;
 }
 
 /* ------------------------------------------------------------------ */

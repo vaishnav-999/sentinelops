@@ -8,3 +8,4 @@ export * from "./containers";
 export * from "./infra";
 export * from "./policies";
 export * from "./incidents";
+export * from "./faults";

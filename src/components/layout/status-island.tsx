@@ -70,12 +70,12 @@ const ISLAND_COPY: Record<
   IslandState,
   { label: string; tone: "ok" | "ai" | "brand" | "warn" | "crit" }
 > = {
-  operational: { label: "All Systems Operational", tone: "ok" },
-  anomaly: { label: "Anomaly Detected", tone: "warn" },
-  diagnosing: { label: "Analyzing", tone: "ai" },
-  healing: { label: "Auto-Healing", tone: "brand" },
+  operational: { label: "All systems operational", tone: "ok" },
+  anomaly: { label: "Anomaly detected", tone: "warn" },
+  diagnosing: { label: "Analyzing telemetry…", tone: "ai" },
+  healing: { label: "Auto-healing", tone: "brand" },
   verifying: { label: "Verifying", tone: "brand" },
-  recovered: { label: "Recovery Complete", tone: "ok" },
+  recovered: { label: "Recovery complete", tone: "ok" },
   escalated: { label: "Escalated", tone: "crit" },
 };
 
@@ -125,9 +125,18 @@ export function StatusIsland() {
   const clock = useSentinelStore((s) => s.cluster.t);
   const anomaly = useSentinelStore((s) => s.anomaly);
   const lastTerminal = useSentinelStore((s) => s.terminalLines.at(-1)?.text);
+  const recoverySec = useSentinelStore((s) => s.chaosRun?.recoverySec ?? null);
   const reduced = useReducedMotion();
 
   const copy = ISLAND_COPY[island];
+  // The two end states name their result inline: "Recovery complete · 18.4s"
+  // and "Escalated · operator approval needed".
+  const label =
+    island === "recovered" && recoverySec !== null
+      ? `${copy.label} · ${recoverySec}s`
+      : island === "escalated"
+        ? `${copy.label} · operator approval needed`
+        : copy.label;
   const target = anomaly.serviceId;
   const unhealthy = island !== "operational";
   const emphasizeLabel = island === "escalated" || copy.tone === "crit";
@@ -143,7 +152,7 @@ export function StatusIsland() {
     <Popover>
       <PopoverTrigger
         className="flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-1.5"
-        aria-label={copy.label}
+        aria-label={label}
       >
         <span
           className={cn(
@@ -158,7 +167,7 @@ export function StatusIsland() {
             emphasizeLabel ? TONE_TEXT[copy.tone] : "text-text-2",
           )}
         >
-          {copy.label}
+          {label}
         </span>
         {target && unhealthy ? (
           <span className={cn("text-xs text-text-2", numeric)}>{target}</span>

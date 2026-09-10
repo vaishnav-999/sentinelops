@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   Anomaly,
+  ChaosRunState,
   ClusterMetrics,
   Container,
   ConnectionStatus,
@@ -110,6 +111,12 @@ export interface SentinelState {
   islandChangedAt: number;
   scenarioPhase: ScenarioPhase;
   activeScenario: ScenarioId | null;
+  /**
+   * Live Chaos Lab run console. Set when a run is requested and kept after it
+   * finishes, so the result panel survives navigation and only a new run or
+   * Reset Demo clears it.
+   */
+  chaosRun: ChaosRunState | null;
 
   /* Connection & session */
   live: boolean;
@@ -182,6 +189,7 @@ export function createInitialState(): SentinelState {
     islandChangedAt: SEED_NOW,
     scenarioPhase: "idle",
     activeScenario: null,
+    chaosRun: null,
 
     live: true,
     connection: "ok",
