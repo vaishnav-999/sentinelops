@@ -16,6 +16,7 @@ import type {
   IslandState,
   LogEntry,
   MetricSample,
+  RemediationExecution,
   RemediationPolicy,
   ScenarioId,
   ScenarioPhase,
@@ -27,12 +28,14 @@ import type {
 } from "@/lib/types";
 import {
   cloneSeedContainers,
+  cloneSeedExecutions,
   cloneSeedIncidents,
   cloneSeedInfraEdges,
   cloneSeedInfraNodes,
   cloneSeedPolicies,
   cloneSeedServices,
   SEED_NOW,
+  SEED_SELECTED_EXECUTION_ID,
 } from "@/lib/mock-data";
 import { aggregateCluster } from "@/lib/simulation/telemetry";
 
@@ -41,6 +44,8 @@ export const CAPS = {
   events: 200,
   logs: 1000,
   terminal: 200,
+  /** Remediation audit trail kept in memory (SPEC §12 "Recent executions"). */
+  executions: 50,
   /** Coarse trail: 61 samples × TRAIL_INTERVAL_TICKS = a 5-minute window. */
   trail: 61,
 } as const;
@@ -94,6 +99,14 @@ export interface SentinelState {
 
   /* Incidents & pipeline */
   incidents: Incident[];
+  /**
+   * Audit trail of automated remediation runs, oldest first. Every scenario
+   * mints one, whatever it ends in, so a blocked or dry-run attempt is as
+   * visible as a successful restart.
+   */
+  executions: RemediationExecution[];
+  /** Which execution the /auto-heal terminal is showing. */
+  selectedExecutionId: string | null;
   events: SystemEvent[];
   logs: LogEntry[];
   terminalLines: TerminalLine[];
@@ -148,6 +161,8 @@ export interface SentinelActions {
    */
   setConnection: (c: ConnectionStatus) => void;
   updateSettings: (patch: Partial<SentinelSettings>) => void;
+  /** Open an execution in the /auto-heal terminal. */
+  selectExecution: (id: string | null) => void;
   /** Restore the exact seeded healthy state (ids, counters and all). */
   reset: () => void;
 }
@@ -176,6 +191,8 @@ export function createInitialState(): SentinelState {
     policies: cloneSeedPolicies(),
 
     incidents: cloneSeedIncidents(),
+    executions: cloneSeedExecutions(),
+    selectedExecutionId: SEED_SELECTED_EXECUTION_ID,
     events: [],
     logs: [],
     terminalLines: [],
@@ -202,7 +219,8 @@ export function createInitialState(): SentinelState {
       autoRemediation: true,
       dryRun: false,
       restartLimit: 2,
-      cooldownSec: 1800,
+      guardrailWindowSec: 1800,
+      cooldownSec: 120,
     },
     guardrails: { actionsByService: {} },
 
@@ -231,6 +249,7 @@ export const useSentinelStore = create<SentinelStore>((set) => ({
   setConnection: (connection) => set({ connection }),
   updateSettings: (patch) =>
     set((s) => ({ settings: { ...s.settings, ...patch } })),
+  selectExecution: (selectedExecutionId) => set({ selectedExecutionId }),
   reset: () => set(createInitialState()),
 }));
 

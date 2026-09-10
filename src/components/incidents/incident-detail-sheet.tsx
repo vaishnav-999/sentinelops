@@ -119,6 +119,14 @@ function Body({
           <Badge variant={TONE_BADGE[statusTone]}>
             {STATUS_LABEL[incident.status]}
           </Badge>
+          {/* Why it ended this way, when "escalated" alone does not say it:
+              a dry-run recommendation and a guardrail refusal look identical
+              in the status column but mean very different things. */}
+          {incident.outcomeLabel ? (
+            <Badge variant="outline" className="font-normal">
+              {incident.outcomeLabel}
+            </Badge>
+          ) : null}
         </div>
         <SheetDescription className={numeric}>
           {serviceName} · {incident.serviceId} · detected{" "}

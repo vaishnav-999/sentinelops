@@ -142,7 +142,7 @@ const FAULT_POLICY: Record<string, string> = {
   memory_leak: "MEM-LEAK-01",
   memory_growth: "MEM-LEAK-01",
   service_crash: "CRASH-01",
-  latency_spike: "CRASH-01",
+  latency_spike: "LATENCY-01",
   cpu_saturation: "CPU-SAT-01",
   cache_saturation: "CACHE-SAT-01",
   db_failure: "DB-FAIL-01",

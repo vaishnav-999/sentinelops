@@ -1,4 +1,5 @@
-import type { ScenarioDefinition } from "../scenario-runner";
+import type { RemediationVerdict, ScenarioDefinition } from "../scenario-runner";
+import { escalate } from "./escalate";
 
 /**
  * Memory leak on `payment-worker` — the headline demo (SPEC §13, §31).
@@ -27,6 +28,13 @@ const AFTER = { memory: 43, latencyP95: 171, errorRate: 0.4 };
 
 /** The single incident this run opens; captured so later steps can update it. */
 let incidentId: string | null = null;
+/**
+ * What the safety layer allowed this run to do (see ScenarioContext.remediate).
+ * Set once at the remediation step; every later step branches on it, so a
+ * blocked or dry run can never fall through into "restarted / verified /
+ * resolved".
+ */
+let verdict: RemediationVerdict = "execute";
 
 export const memoryLeakScenario: ScenarioDefinition = {
   id: "memory-leak",
@@ -44,6 +52,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
       label: "inject",
       run: (ctx) => {
         incidentId = null;
+        verdict = "execute";
         ctx.step("injected");
         ctx.setServiceMetrics(TARGET, { memory: 61, latencyP95: 210, errorRate: 0.7 });
         ctx.runConsole({ action: null, policyNote: null, diagnosisNote: null });
@@ -200,6 +209,43 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 14000,
       label: "remediating",
       run: (ctx) => {
+        verdict = ctx.remediate({
+          serviceId: TARGET,
+          policyId: POLICY,
+          actionKind: ACTION,
+          incidentId,
+        });
+        if (verdict === "blocked") {
+          escalate(ctx, {
+            incidentId,
+            target: TARGET,
+            policyNote: "Guardrail: automatic action limit reached for this service",
+            outcomeLabel: "Guardrail blocked — escalated to operator",
+            policyStageDetail: "Guardrail: automatic action limit reached.",
+            toast: `No further automatic action on ${TARGET} — operator approval required.`,
+          });
+          return;
+        }
+        if (verdict === "dry_run") {
+          ctx.runConsole({
+            action: null,
+            policyNote: `Dry run: ${ACTION} (${POLICY}) recommended, not executed`,
+          });
+          ctx.pushEvent(
+            "remediation",
+            `Dry run — restart recommended for ${TARGET}, not executed`,
+            { severity: "warn", serviceId: TARGET },
+          );
+          ctx.log("WARN", TARGET, `Dry run: ${ACTION} not executed`);
+          if (incidentId) {
+            ctx.completeStage(
+              incidentId,
+              "policy_check",
+              `Dry run — ${ACTION} (${POLICY}) recommended.`,
+            );
+          }
+          return;
+        }
         ctx.pushTerminal(`action approved: ${ACTION}`, "command");
         ctx.pushTerminal("executing...", "info");
         ctx.step("remediating");
@@ -227,6 +273,15 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 18000,
       label: "restarted",
       run: (ctx) => {
+        if (verdict === "blocked") return;
+        if (verdict === "dry_run") {
+          // Nothing was restarted. The heap is still leaking, so the metrics
+          // only ease back on their own as the walk drifts toward a calmer
+          // target — visibly slower than a restart.
+          ctx.setServiceTarget(TARGET, AFTER);
+          ctx.pushTerminal("no action executed — dry run", "warn");
+          return;
+        }
         ctx.pushTerminal("payment-worker restarted", "success");
         ctx.setContainerStatus(TARGET, "running");
         // The restart reclaims the heap: targets drop back below baseline.
@@ -249,6 +304,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 22000,
       label: "verifying",
       run: (ctx) => {
+        if (verdict !== "execute") return;
         ctx.step("verifying");
         ctx.setIsland("verifying");
         if (incidentId) {
@@ -261,22 +317,29 @@ export const memoryLeakScenario: ScenarioDefinition = {
     {
       atMs: 22600,
       label: "check-1",
-      run: (ctx) => ctx.healthCheck("Liveness probe · 200 OK"),
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck("Liveness probe · 200 OK");
+      },
     },
     {
       atMs: 23600,
       label: "check-2",
-      run: (ctx) => ctx.healthCheck("Memory below baseline envelope"),
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck("Memory below baseline envelope");
+      },
     },
     {
       atMs: 24600,
       label: "check-3",
-      run: (ctx) => ctx.healthCheck("Job queue drained · error rate 0.4%"),
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck("Job queue drained · error rate 0.4%");
+      },
     },
     {
       atMs: 26000,
       label: "verified",
       run: (ctx) => {
+        if (verdict !== "execute") return;
         ctx.pushTerminal("health verification passed", "success");
         ctx.pushEvent("verification", "3 of 3 health checks passed", {
           severity: "ok",
@@ -291,6 +354,18 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 26600,
       label: "resolved",
       run: (ctx) => {
+        if (verdict === "blocked") return;
+        if (verdict === "dry_run") {
+          escalate(ctx, {
+            incidentId,
+            target: TARGET,
+            policyNote: `Dry run: ${ACTION} (${POLICY}) recommended, not executed`,
+            outcomeLabel: "Recommended — awaiting approval",
+            policyStageDetail: null,
+            toast: `Dry run: restart recommended for ${TARGET}.`,
+          });
+          return;
+        }
         ctx.setServiceStatus(TARGET, "healthy");
         ctx.resetServiceTarget(TARGET);
         ctx.step("resolved");
@@ -323,6 +398,12 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 28000,
       label: "decay",
       run: (ctx) => {
+        if (verdict !== "execute") {
+          // No action ran, so nothing was fixed — the signals fade on their
+          // own. The incident stays escalated regardless.
+          ctx.resetServiceTarget(TARGET);
+          ctx.setServiceStatus(TARGET, "healthy");
+        }
         ctx.setAnomaly({
           score: 0.08,
           baseline: "normal",

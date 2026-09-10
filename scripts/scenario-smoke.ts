@@ -4,13 +4,18 @@
  * Drives the real engine (real timers, real store, real scenarios) at a
  * compressed time scale and asserts the invariants the demo depends on:
  *
- *   1. Memory leak five times back to back — every run ends resolved, every
- *      service healthy, the island back to operational. Run #1 after a reset
- *      reproduces the slide numbers exactly; runs #2+ vary inside their ranges.
- *   2. Reset in the middle of remediation — clean healthy state, no incident
+ *   1. Memory leak five times, resetting between runs — every run ends
+ *      resolved, every service healthy, the island back to operational, and
+ *      each one reproduces the slide numbers exactly (a reset restores the
+ *      seeded state, so run #1 timing applies every time).
+ *   2. Two runs without a reset — the second is drawn, so the numbers vary.
+ *   3. Three runs without a reset — the third is refused by the guardrail and
+ *      escalates instead of restarting payment-worker a third time.
+ *   4. Dry run — recommended, never executed, incident ends escalated.
+ *   5. Reset in the middle of remediation — clean healthy state, no incident
  *      stuck mid-stage.
- *   3. Unknown anomaly — ends escalated, and nothing was restarted.
- *   4. No duplicate incident ids, and no timers left running afterwards.
+ *   6. Unknown anomaly — ends escalated, and nothing was restarted.
+ *   7. No duplicate incident ids, and no timers left running afterwards.
  *
  * The engine advances 1 simulated second per tick regardless of `timeScale`,
  * so the compressed run exercises exactly the same step sequence the browser
@@ -74,9 +79,28 @@ async function waitFor(
 
 const state = () => sentinelStore.get();
 
+/** Every scenario the script starts records exactly one experiment row. */
+let runsStarted = 0;
+
 async function runToCompletion(id: ScenarioId): Promise<void> {
+  runsStarted += 1;
   engine.runScenario(id);
   await waitFor(`${id} to finish`, () => state().activeScenario === null, 15000);
+}
+
+/** Reset and let the engine settle, so the next run starts from the seed. */
+async function resetDemo(): Promise<void> {
+  engine.reset();
+  await sleep(20);
+}
+
+function terminalHas(fragment: string): boolean {
+  return state().terminalLines.some((l) => l.text.includes(fragment));
+}
+
+function liveIncident(): Incident | undefined {
+  const id = state().chaosRun?.incidentId;
+  return state().incidents.find((i) => i.id === id);
 }
 
 function allHealthy(): boolean {
@@ -117,12 +141,13 @@ async function main(): Promise<void> {
   engine.reset();
   await sleep(20);
 
-  /* -------- 1. memory leak, five times back to back -------------------- */
-  console.log("\n1. Memory leak × 5 back to back");
+  /* -------- 1. memory leak x5, resetting between runs ------------------ */
+  console.log("\n1. Memory leak x5, reset between runs");
   const incidentIds: string[] = [];
-  const detections: number[] = [];
-  const recoveries: number[] = [];
   for (let i = 1; i <= 5; i += 1) {
+    // Resetting between runs clears the guardrail counters, so this section
+    // measures the happy path rather than the refusal section 3 is about.
+    await resetDemo();
     await runToCompletion("memory-leak");
     const s = state();
     const run = s.chaosRun;
@@ -132,28 +157,21 @@ async function main(): Promise<void> {
       `run ${i} ended in the resolved phase`,
       s.scenarioPhase,
     );
-    check(allHealthy(), `run ${i} left every service healthy`, s.services.map((x) => `${x.id}:${x.status}`));
-    if (i === 1) {
-      // The first run after a reset is the one the slides quote.
-      check(
-        run?.mlDetectedSec === BASELINE_TIMING.mlDetectSec,
-        `run 1 detected at exactly +${BASELINE_TIMING.mlDetectSec}s`,
-        run?.mlDetectedSec,
-      );
-      check(
-        run?.recoverySec === BASELINE_TIMING.recoverySec,
-        `run 1 recovered in exactly ${BASELINE_TIMING.recoverySec}s`,
-        run?.recoverySec,
-      );
-    }
     check(
-      inRange(run?.mlDetectedSec, TIMING_RANGE.mlDetectSec),
-      `run ${i} detected inside ${TIMING_RANGE.mlDetectSec.join("–")}s`,
+      allHealthy(),
+      `run ${i} left every service healthy`,
+      s.services.map((x) => `${x.id}:${x.status}`),
+    );
+    // A reset restores the seeded state exactly, so every run here is run #1
+    // and must reproduce the numbers the slides quote.
+    check(
+      run?.mlDetectedSec === BASELINE_TIMING.mlDetectSec,
+      `run ${i} detected at exactly +${BASELINE_TIMING.mlDetectSec}s`,
       run?.mlDetectedSec,
     );
     check(
-      inRange(run?.recoverySec, TIMING_RANGE.recoverySec),
-      `run ${i} recovered inside ${TIMING_RANGE.recoverySec.join("–")}s`,
+      run?.recoverySec === BASELINE_TIMING.recoverySec,
+      `run ${i} recovered in exactly ${BASELINE_TIMING.recoverySec}s`,
       run?.recoverySec,
     );
     check(
@@ -164,16 +182,26 @@ async function main(): Promise<void> {
         TIMING_RANGE.thresholdDelaySec,
         TICK_SLACK_SEC,
       ),
-      `run ${i} threshold rule confirmed ${TIMING_RANGE.thresholdDelaySec.join("–")}s after the detector`,
+      `run ${i} threshold rule confirmed ${TIMING_RANGE.thresholdDelaySec.join("-")}s after the detector`,
       [run?.mlDetectedSec, run?.thresholdDetectedSec],
     );
-    detections.push(run?.mlDetectedSec ?? 0);
-    recoveries.push(run?.recoverySec ?? 0);
 
-    const incident = s.incidents.find((x) => x.id === run?.incidentId);
+    const incident = liveIncident();
     check(incident?.status === "resolved", `run ${i} incident resolved`, incident?.status);
     check(incident?.auto === true, `run ${i} incident marked auto-healed`, incident?.auto);
     if (run?.incidentId) incidentIds.push(run.incidentId);
+
+    const execution = s.executions.at(-1);
+    check(
+      execution?.outcome === "success",
+      `run ${i} execution recorded as success`,
+      execution?.outcome,
+    );
+    check(
+      execution?.policyId === "MEM-LEAK-01" && execution.action === "restart_container",
+      `run ${i} execution names the policy it ran`,
+      [execution?.policyId, execution?.action],
+    );
 
     // The island returns to operational 8 simulated seconds after `recovered`;
     // the scenario tail is longer than that, so it should already be back.
@@ -183,30 +211,155 @@ async function main(): Promise<void> {
       s.islandState,
     );
   }
+  // Reset restores the id counter too, so a reset run always mints INC-1042 —
+  // that reproducibility is the point of resetting between runs.
   check(
-    new Set(incidentIds).size === incidentIds.length,
-    "no duplicate incident ids across runs",
+    incidentIds.every((id) => id === "INC-1042"),
+    "every reset run reproduced the seeded incident id",
     incidentIds,
+  );
+
+  /* -------- 2. two runs without a reset: the second is drawn ----------- */
+  console.log("\n2. Per-run variation without a reset");
+  await resetDemo();
+  await runToCompletion("memory-leak");
+  const first = state().chaosRun;
+  await runToCompletion("memory-leak");
+  const second = state().chaosRun;
+  check(second?.outcome === "auto_healed", "second run auto-healed", second?.outcome);
+  check(
+    inRange(second?.mlDetectedSec, TIMING_RANGE.mlDetectSec),
+    `second run detected inside ${TIMING_RANGE.mlDetectSec.join("-")}s`,
+    second?.mlDetectedSec,
+  );
+  check(
+    inRange(second?.recoverySec, TIMING_RANGE.recoverySec),
+    `second run recovered inside ${TIMING_RANGE.recoverySec.join("-")}s`,
+    second?.recoverySec,
   );
   // The whole point of the per-run draw: the table must not look hardcoded.
   check(
-    new Set(detections.slice(1)).size > 1,
-    "detection times vary across runs 2–5",
-    detections,
-  );
-  check(
-    new Set(recoveries.slice(1)).size > 1,
-    "recovery times vary across runs 2–5",
-    recoveries,
-  );
-  check(
-    state().experimentRuns.length === 9,
-    "nine experiment runs recorded",
-    state().experimentRuns.length,
+    second?.mlDetectedSec !== first?.mlDetectedSec ||
+      second?.recoverySec !== first?.recoverySec,
+    "run 2 timing differs from the baseline run",
+    [first?.mlDetectedSec, first?.recoverySec, second?.mlDetectedSec, second?.recoverySec],
   );
 
-  /* -------- 2. reset in the middle of remediation ---------------------- */
-  console.log("\n2. Reset during remediation");
+  /* -------- 3. guardrail: the third action is refused ------------------ */
+  console.log("\n3. Three memory-leak runs without a reset");
+  await resetDemo();
+  for (let i = 1; i <= 2; i += 1) {
+    await runToCompletion("memory-leak");
+    check(
+      state().chaosRun?.outcome === "auto_healed",
+      `guardrail run ${i} still auto-healed`,
+      state().chaosRun?.outcome,
+    );
+  }
+  check(
+    state().guardrails.actionsByService["payment-worker"]?.length === 2,
+    "two automatic actions counted against payment-worker",
+    state().guardrails.actionsByService["payment-worker"],
+  );
+
+  await runToCompletion("memory-leak");
+  {
+    const s = state();
+    const run = s.chaosRun;
+    const minted = s.incidents.filter((i) => i.scenarioId === "memory-leak").map((i) => i.id);
+    check(
+      new Set(minted).size === minted.length && minted.length === 3,
+      "three distinct incident ids across the three runs",
+      minted,
+    );
+    check(run?.outcome === "escalated", "third run escalated", run?.outcome);
+    check(run?.action === null, "third run took no action", run?.action);
+    check(
+      terminalHas("guardrail: restart limit reached (2/30min)"),
+      "guardrail line written to the terminal",
+      s.terminalLines.slice(-4).map((l) => l.text),
+    );
+    const incident = liveIncident();
+    check(incident?.status === "escalated", "third incident escalated", incident?.status);
+    check(
+      incident?.outcomeLabel === "Guardrail blocked — escalated to operator",
+      "third incident labelled as guardrail-blocked",
+      incident?.outcomeLabel,
+    );
+    check(
+      s.executions.at(-1)?.outcome === "escalated",
+      "third execution recorded as escalated",
+      s.executions.at(-1)?.outcome,
+    );
+    check(
+      s.guardrails.actionsByService["payment-worker"]?.length === 2,
+      "the refused action was not counted against the budget",
+      s.guardrails.actionsByService["payment-worker"],
+    );
+    check(allHealthy(), "services drifted back to healthy without an action");
+    check(
+      s.containers.every((c) => c.status === "running"),
+      "no container was restarted a third time",
+      s.containers.map((c) => `${c.name}:${c.status}`),
+    );
+  }
+  // Reset Demo must clear the counters, or the guardrail story is one-shot.
+  await resetDemo();
+  check(
+    Object.keys(state().guardrails.actionsByService).length === 0,
+    "reset cleared the guardrail counters",
+    state().guardrails.actionsByService,
+  );
+
+  /* -------- 4. dry run: recommended, never executed -------------------- */
+  console.log("\n4. Dry run");
+  const containersBeforeDryRun = state().containers.map((c) => `${c.id}:${c.status}`);
+  state().updateSettings({ dryRun: true });
+  await runToCompletion("memory-leak");
+  {
+    const s = state();
+    const run = s.chaosRun;
+    check(run?.outcome === "escalated", "dry run escalated", run?.outcome);
+    check(run?.action === null, "dry run executed no action", run?.action);
+    check(
+      terminalHas("DRY RUN: would execute restart_container"),
+      "dry-run line written to the terminal",
+      s.terminalLines.slice(-6).map((l) => l.text),
+    );
+    const incident = liveIncident();
+    check(incident?.status === "escalated", "dry-run incident escalated", incident?.status);
+    check(
+      incident?.outcomeLabel === "Recommended — awaiting approval",
+      "dry-run incident labelled as a recommendation",
+      incident?.outcomeLabel,
+    );
+    check(incident?.auto === false, "dry-run incident not marked auto-healed", incident?.auto);
+    check(
+      s.executions.at(-1)?.dryRun === true,
+      "execution flagged as a dry run",
+      s.executions.at(-1)?.dryRun,
+    );
+    check(
+      JSON.stringify(s.containers.map((c) => `${c.id}:${c.status}`)) ===
+        JSON.stringify(containersBeforeDryRun),
+      "nothing was restarted during the dry run",
+      s.containers.map((c) => `${c.name}:${c.status}`),
+    );
+    check(
+      Object.values(s.guardrails.actionsByService).every((t) => t.length === 0),
+      "a dry run does not consume the guardrail budget",
+      s.guardrails.actionsByService,
+    );
+    check(allHealthy(), "metrics recovered on their own after the dry run");
+  }
+  state().updateSettings({ dryRun: false });
+  await resetDemo();
+
+  /* -------- 5. reset in the middle of remediation ---------------------- */
+  console.log("\n5. Reset during remediation");
+  const runsBeforeAbort = state().experimentRuns.length;
+  const executionsBeforeAbort = state().executions.length;
+  runsStarted += 1;
   engine.runScenario("memory-leak");
   const reached = await waitFor(
     "the remediating phase",
@@ -214,8 +367,7 @@ async function main(): Promise<void> {
     15000,
   );
   if (reached) {
-    engine.reset();
-    await sleep(20);
+    await resetDemo();
     const s = state();
     check(s.activeScenario === null, "no active scenario after reset", s.activeScenario);
     check(s.scenarioPhase === "idle", "phase back to idle", s.scenarioPhase);
@@ -231,8 +383,13 @@ async function main(): Promise<void> {
       s.detectors,
     );
     check(
-      s.experimentRuns.length === 10 &&
-        s.experimentRuns[9].outcome === "cancelled",
+      s.executions.length === executionsBeforeAbort,
+      "the aborted run left no execution record",
+      s.executions.length,
+    );
+    check(
+      s.experimentRuns.length === runsBeforeAbort + 1 &&
+        s.experimentRuns[s.experimentRuns.length - 1].outcome === "cancelled",
       "experiment history kept; the aborted run is marked cancelled",
       s.experimentRuns.map((e) => e.outcome),
     );
@@ -243,8 +400,8 @@ async function main(): Promise<void> {
     );
   }
 
-  /* -------- 3. unknown anomaly escalates, never restarts --------------- */
-  console.log("\n3. Unknown anomaly");
+  /* -------- 6. unknown anomaly escalates, never restarts --------------- */
+  console.log("\n6. Unknown anomaly");
   const containersBefore = state().containers.map((c) => `${c.id}:${c.status}`);
   await runToCompletion("unknown-anomaly");
   {
@@ -263,7 +420,7 @@ async function main(): Promise<void> {
         JSON.stringify(containersBefore),
       "no container was restarted",
     );
-    const incident = s.incidents.find((x) => x.id === run?.incidentId);
+    const incident = liveIncident();
     check(incident?.status === "escalated", "incident escalated", incident?.status);
     check(incident?.auto === false, "incident not marked auto-healed", incident?.auto);
     check(
@@ -272,10 +429,19 @@ async function main(): Promise<void> {
     );
   }
 
-  /* -------- 4. teardown: no leftover timers ---------------------------- */
-  console.log("\n4. Teardown");
-  engine.reset();
-  await sleep(20);
+  /* -------- 7. teardown: no leftover timers ---------------------------- */
+  console.log("\n7. Teardown");
+  await resetDemo();
+  check(
+    state().executions.length === 6,
+    "reset restored the six seeded executions",
+    state().executions.length,
+  );
+  check(
+    state().policies.length === 7,
+    "seven remediation policies are seeded",
+    state().policies.length,
+  );
   engine.stop();
   const frozen = JSON.stringify(state().cluster);
   await sleep(60);
@@ -284,9 +450,9 @@ async function main(): Promise<void> {
     "no timer keeps writing after stop()",
   );
   check(
-    state().experimentRuns.length === 11,
+    state().experimentRuns.length === runsStarted,
     "experiment history survived every reset",
-    state().experimentRuns.length,
+    [state().experimentRuns.length, runsStarted],
   );
 
   console.log(

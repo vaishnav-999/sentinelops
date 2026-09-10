@@ -8,6 +8,7 @@ import type {
   IncidentStage,
   LogEntry,
   LogLevel,
+  RemediationExecution,
   RunStepId,
   RunStepRecord,
   ScenarioId,
@@ -42,6 +43,8 @@ import {
   type NotifyLevel,
   type OpenIncidentInput,
   type ScenarioContext,
+  type RemediateInput,
+  type RemediationVerdict,
   type ScenarioDefinition,
 } from "./scenario-runner";
 import { memoryLeakScenario } from "./scenarios/memory-leak";
@@ -81,6 +84,9 @@ const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
 export function getScenario(id: ScenarioId): ScenarioDefinition | undefined {
   return SCENARIOS[id];
 }
+
+/** First execution id the engine mints; the seeded history ends at EXE-2206. */
+const NEXT_EXECUTION_SEQ = 2207;
 
 /** Ticks between coarse-trail samples: 5 s × CAPS.trail ≈ a 5-minute window. */
 const TRAIL_INTERVAL_TICKS = 5;
@@ -186,6 +192,10 @@ export class SimulationEngine {
   private runStartClock = 0;
   private injected = false;
   private experimentId: string | null = null;
+  /** The audit record this run is streaming its terminal transcript into. */
+  private executionId: string | null = null;
+  /** Monotonic counter behind the EXE-#### ids the engine mints. */
+  private executionSeq = NEXT_EXECUTION_SEQ;
   /**
    * Scheduled offset of the step currently executing, so `ctx.now()` reports
    * choreographed time rather than tick-quantised time. Null between steps.
@@ -305,6 +315,22 @@ export class SimulationEngine {
     };
     this.experimentId = experiment.id;
 
+    // Every run opens an audit record up front, so /auto-heal has something to
+    // stream into from the first line — including runs that never act.
+    const execution: RemediationExecution = {
+      id: `EXE-${this.executionSeq}`,
+      incidentId: "",
+      policyId: "",
+      serviceId: def.target,
+      action: "",
+      startedAt: this.clock,
+      outcome: "in_progress",
+      dryRun: sentinelStore.get().settings.dryRun,
+      lines: [],
+    };
+    this.executionSeq += 1;
+    this.executionId = execution.id;
+
     const steps: RunStepRecord[] = (
       def.expected === "escalate" ? ESCALATE_STEPS : AUTO_HEAL_STEPS
     ).map((s) => ({ id: s, at: null }));
@@ -339,6 +365,9 @@ export class SimulationEngine {
       scenarioPhase: "injecting",
       chaosRun,
       experimentRuns: cap([...s.experimentRuns, experiment], 100),
+      executions: cap([...s.executions, execution], CAPS.executions),
+      // The newest execution is what the operator wants to watch.
+      selectedExecutionId: execution.id,
       // Each run starts from a clean detector pair, so back-to-back runs never
       // inherit the previous run's "fired" state.
       detectors: s.detectors.map((d) =>
@@ -370,6 +399,10 @@ export class SimulationEngine {
     this.incidentSeq = NEXT_INCIDENT_SEQ;
     this.stepAtMs = null;
     this.runsSinceReset = 0;
+    // Reset Demo clears the guardrail counters with everything else, so the
+    // "third action is blocked" story can be replayed from scratch.
+    this.executionSeq = NEXT_EXECUTION_SEQ;
+    this.executionId = null;
     this.runTiming = nominalTiming();
 
     sentinelStore.get().reset();
@@ -389,6 +422,13 @@ export class SimulationEngine {
     const shift = this.clock - SEED_NOW;
     if (shift === 0) return;
     sentinelStore.set((s) => ({
+      executions: s.executions.map((exe) => ({
+        ...exe,
+        startedAt: exe.startedAt + shift,
+        completedAt:
+          exe.completedAt === undefined ? undefined : exe.completedAt + shift,
+        lines: exe.lines.map((l) => ({ ...l, t: l.t + shift })),
+      })),
       incidents: s.incidents.map((inc) =>
         inc.scenarioId !== undefined
           ? inc
@@ -411,6 +451,19 @@ export class SimulationEngine {
     this.run.cancel();
     this.run = null;
     this.injected = false;
+
+    // A cancelled run never reached a verdict, so it leaves no audit record.
+    const executionId = this.executionId;
+    this.executionId = null;
+    if (executionId) {
+      sentinelStore.set((s) => ({
+        executions: s.executions.filter((e) => e.id !== executionId),
+        selectedExecutionId:
+          s.selectedExecutionId === executionId
+            ? (s.executions.filter((e) => e.id !== executionId).at(-1)?.id ?? null)
+            : s.selectedExecutionId,
+      }));
+    }
 
     const id = this.experimentId;
     this.experimentId = null;
@@ -630,6 +683,13 @@ export class SimulationEngine {
       current: null,
     });
 
+    this.patchExecution({
+      outcome: outcome === "escalated" ? "escalated" : "success",
+      completedAt: this.clock,
+      incidentId: state.chaosRun?.incidentId ?? "",
+    });
+    this.executionId = null;
+
     this.run = null;
     this.injected = false;
     this.experimentId = null;
@@ -684,9 +744,80 @@ export class SimulationEngine {
       text,
       level,
     };
+    const executionId = this.executionId;
     sentinelStore.set((s) => ({
       terminalLines: cap([...s.terminalLines, line], CAPS.terminal),
+      executions:
+        executionId === null
+          ? s.executions
+          : s.executions.map((e) =>
+              e.id === executionId ? { ...e, lines: [...e.lines, line] } : e,
+            ),
     }));
+  }
+
+  /** Patch the run's audit record, if one is open. */
+  private patchExecution(patch: Partial<RemediationExecution>): void {
+    const id = this.executionId;
+    if (!id) return;
+    sentinelStore.set((s) => ({
+      executions: s.executions.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+    }));
+  }
+
+  /**
+   * The safety layer. Every automatic action passes through here, in this
+   * order: guardrail first (a refusal must not be masked by dry-run), then the
+   * dry-run switch, then commit.
+   *
+   * The guardrail counts automatic actions committed against one service inside
+   * `guardrailWindowSec` of simulated time. Reaching `restartLimit` means the
+   * platform stops trying and hands the incident to an operator — restarting a
+   * service a third time is how an autonomous system turns a fault into an
+   * outage.
+   */
+  private remediate(input: RemediateInput): RemediationVerdict {
+    const { settings, guardrails } = sentinelStore.get();
+    const now = this.stepNow();
+    const windowMs = settings.guardrailWindowSec * 1000;
+    const recent = (guardrails.actionsByService[input.serviceId] ?? []).filter(
+      (t) => now - t < windowMs,
+    );
+
+    this.patchExecution({
+      policyId: input.policyId,
+      action: input.actionKind,
+      incidentId: input.incidentId ?? "",
+    });
+
+    const commit = (times: number[]) =>
+      sentinelStore.set((s) => ({
+        guardrails: {
+          actionsByService: {
+            ...s.guardrails.actionsByService,
+            [input.serviceId]: times,
+          },
+        },
+      }));
+
+    if (recent.length >= settings.restartLimit) {
+      // Prune the expired timestamps while we are here.
+      commit(recent);
+      const minutes = Math.round(settings.guardrailWindowSec / 60);
+      this.pushTerminal(
+        `guardrail: restart limit reached (${settings.restartLimit}/${minutes}min) → escalating to operator`,
+        "error",
+      );
+      return "blocked";
+    }
+
+    if (settings.dryRun) {
+      this.pushTerminal(`DRY RUN: would execute ${input.actionKind}`, "warn");
+      return "dry_run";
+    }
+
+    commit([...recent, now]);
+    return "execute";
   }
 
   private pushLog(level: LogLevel, service: string, message: string): void {
@@ -769,20 +900,30 @@ export class SimulationEngine {
       },
       setPhase: (scenarioPhase) => sentinelStore.set({ scenarioPhase }),
       step: (id) => {
-        sentinelStore.set((s) => ({
-          scenarioPhase: STEP_PHASE[id],
-          chaosRun: s.chaosRun
-            ? {
-                ...s.chaosRun,
-                current: id,
-                steps: s.chaosRun.steps.map((x) =>
-                  x.id === id && x.at === null ? { ...x, at: this.stepNow() } : x,
-                ),
-              }
-            : s.chaosRun,
-        }));
+        const at = this.stepNow();
+        sentinelStore.set((s) => {
+          if (!s.chaosRun) return { scenarioPhase: STEP_PHASE[id] };
+          // A run that expected to auto-heal has no `escalated` node in its
+          // stepper. A guardrail refusal or a dry run can still end there, so
+          // the node is appended and the steps it never reached are dropped —
+          // showing "Remediating · pending" beside "Escalated" would be a lie.
+          const known = s.chaosRun.steps.some((x) => x.id === id);
+          const steps = known
+            ? s.chaosRun.steps.map((x) =>
+                x.id === id && x.at === null ? { ...x, at } : x,
+              )
+            : [
+                ...s.chaosRun.steps.filter((x) => x.at !== null),
+                { id, at },
+              ];
+          return {
+            scenarioPhase: STEP_PHASE[id],
+            chaosRun: { ...s.chaosRun, current: id, steps },
+          };
+        });
       },
       runConsole: (patch) => this.patchRun(patch),
+      remediate: (input) => this.remediate(input),
       healthCheck: (text) =>
         sentinelStore.set((s) =>
           s.chaosRun
@@ -880,6 +1021,7 @@ export class SimulationEngine {
         };
         sentinelStore.set((s) => ({ incidents: [...s.incidents, incident] }));
         this.patchRun({ incidentId: id });
+        this.patchExecution({ incidentId: id });
         return id;
       },
       updateIncident: (id, patch) =>

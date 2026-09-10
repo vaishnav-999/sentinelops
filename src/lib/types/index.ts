@@ -234,6 +234,12 @@ export interface RemediationPolicy {
   risk: RiskLevel;
   mode: RemediationMode;
   description?: string;
+  /**
+   * The machine-readable condition the policy fires on, shown verbatim in the
+   * expanded policy row, e.g.
+   * "signature = memory_leak AND match >= 0.70 AND restarts_in_window < 2".
+   */
+  conditions: string;
 }
 
 export type RemediationOutcome =
@@ -322,6 +328,12 @@ export interface Incident {
   after?: Partial<ServiceMetrics>;
   /** True when resolved autonomously, false when escalated to an operator. */
   auto: boolean;
+  /**
+   * Short label for how the incident ended when it did NOT auto-heal, e.g.
+   * "Recommended — awaiting approval" (dry run) or the guardrail that stopped
+   * it. Absent on auto-healed incidents, whose outcome is already the status.
+   */
+  outcomeLabel?: string;
   scenarioId?: ScenarioId;
 }
 
@@ -510,15 +522,17 @@ export interface SentinelSettings {
   autoRemediation: boolean;
   /** When true, remediation actions are simulated but never "committed". */
   dryRun: boolean;
-  /** Max auto-restart actions allowed per service inside the cooldown window. */
+  /** Max automatic actions allowed per service inside the guardrail window. */
   restartLimit: number;
-  /** Guardrail window / cooldown, seconds (SPEC §36: 30 min = 1800). */
+  /** Guardrail window the limit is counted over, seconds (30 min = 1800). */
+  guardrailWindowSec: number;
+  /** Minimum gap the engine leaves between two actions on a service, seconds. */
   cooldownSec: number;
 }
 
 /**
  * Guardrail bookkeeping: epoch-ms timestamps of automated actions per service,
- * used to enforce `restartLimit` within `cooldownSec`.
+ * used to enforce `restartLimit` within `guardrailWindowSec`.
  */
 export interface GuardrailState {
   actionsByService: Record<string, number[]>;

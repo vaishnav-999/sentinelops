@@ -1,5 +1,11 @@
 import type { IncidentSeverity, ServiceMetrics } from "@/lib/types";
-import type { ScenarioDefinition, ScenarioMetric, ScenarioStep } from "../scenario-runner";
+import type {
+  RemediationVerdict,
+  ScenarioDefinition,
+  ScenarioMetric,
+  ScenarioStep,
+} from "../scenario-runner";
+import { escalate } from "./escalate";
 
 /**
  * Reusable step builder for the short chaos runs.
@@ -81,6 +87,12 @@ export function buildStandardScenario(
   cfg: StandardScenarioConfig,
 ): ScenarioDefinition {
   let incidentId: string | null = null;
+  /**
+   * What the safety layer allowed this run to do. Set once at the remediation
+   * step; every later step branches on it, so a blocked or dry run cannot
+   * silently fall through into "restarted / verified / resolved".
+   */
+  let verdict: RemediationVerdict = "execute";
 
   const steps: ScenarioStep[] = [
     {
@@ -88,6 +100,7 @@ export function buildStandardScenario(
       label: "inject",
       run: (ctx) => {
         incidentId = null;
+        verdict = "execute";
         ctx.step("injected");
         ctx.runConsole({ action: null, policyNote: null, diagnosisNote: null });
         ctx.setServiceMetrics(cfg.target, cfg.ramp[0]);
@@ -215,6 +228,43 @@ export function buildStandardScenario(
       atMs: T.remediate,
       label: "remediating",
       run: (ctx) => {
+        verdict = ctx.remediate({
+          serviceId: cfg.target,
+          policyId: cfg.policyId,
+          actionKind: cfg.actionKind,
+          incidentId,
+        });
+        if (verdict === "blocked") {
+          escalate(ctx, {
+            incidentId,
+            target: cfg.target,
+            policyNote: "Guardrail: automatic action limit reached for this service",
+            outcomeLabel: "Guardrail blocked — escalated to operator",
+            policyStageDetail: "Guardrail: automatic action limit reached.",
+            toast: `No further automatic action on ${cfg.target} — operator approval required.`,
+          });
+          return;
+        }
+        if (verdict === "dry_run") {
+          ctx.runConsole({
+            action: null,
+            policyNote: `Dry run: ${cfg.actionKind} (${cfg.policyId}) recommended, not executed`,
+          });
+          ctx.pushEvent(
+            "remediation",
+            `Dry run — ${cfg.actionLabel} recommended for ${cfg.target}, not executed`,
+            { severity: "warn", serviceId: cfg.target },
+          );
+          ctx.log("WARN", cfg.target, `Dry run: ${cfg.actionKind} not executed`);
+          if (incidentId) {
+            ctx.completeStage(
+              incidentId,
+              "policy_check",
+              `Dry run — ${cfg.actionKind} (${cfg.policyId}) recommended.`,
+            );
+          }
+          return;
+        }
         ctx.pushTerminal(`action approved: ${cfg.actionKind}`, "command");
         ctx.pushTerminal("executing...", "info");
         ctx.step("remediating");
@@ -242,6 +292,14 @@ export function buildStandardScenario(
       atMs: T.acted,
       label: "acted",
       run: (ctx) => {
+        if (verdict === "blocked") return;
+        if (verdict === "dry_run") {
+          // Nothing was restarted. The fault is untreated, so the metrics only
+          // ease back on their own as the walk drifts toward a calmer target.
+          ctx.setServiceTarget(cfg.target, cfg.after);
+          ctx.pushTerminal("no action executed — dry run", "warn");
+          return;
+        }
         ctx.pushTerminal(cfg.actedLine, "success");
         if (cfg.cyclesContainer) ctx.setContainerStatus(cfg.target, "running");
         ctx.setServiceMetrics(cfg.target, cfg.after);
@@ -258,6 +316,7 @@ export function buildStandardScenario(
       atMs: T.verify,
       label: "verifying",
       run: (ctx) => {
+        if (verdict !== "execute") return;
         ctx.step("verifying");
         ctx.setIsland("verifying");
         if (incidentId) {
@@ -267,13 +326,29 @@ export function buildStandardScenario(
         ctx.pushTerminal("health verification...", "info");
       },
     },
-    { atMs: T.check1, run: (ctx) => ctx.healthCheck(cfg.healthChecks[0]) },
-    { atMs: T.check2, run: (ctx) => ctx.healthCheck(cfg.healthChecks[1]) },
-    { atMs: T.check3, run: (ctx) => ctx.healthCheck(cfg.healthChecks[2]) },
+    {
+      atMs: T.check1,
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck(cfg.healthChecks[0]);
+      },
+    },
+    {
+      atMs: T.check2,
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck(cfg.healthChecks[1]);
+      },
+    },
+    {
+      atMs: T.check3,
+      run: (ctx) => {
+        if (verdict === "execute") ctx.healthCheck(cfg.healthChecks[2]);
+      },
+    },
     {
       atMs: T.verified,
       label: "verified",
       run: (ctx) => {
+        if (verdict !== "execute") return;
         ctx.pushTerminal("health verification passed", "success");
         ctx.pushEvent("verification", "3 of 3 health checks passed", {
           severity: "ok",
@@ -288,6 +363,18 @@ export function buildStandardScenario(
       atMs: T.resolve,
       label: "resolved",
       run: (ctx) => {
+        if (verdict === "blocked") return;
+        if (verdict === "dry_run") {
+          escalate(ctx, {
+            incidentId,
+            target: cfg.target,
+            policyNote: `Dry run: ${cfg.actionKind} (${cfg.policyId}) recommended, not executed`,
+            outcomeLabel: "Recommended — awaiting approval",
+            policyStageDetail: null,
+            toast: `Dry run: ${cfg.actionLabel.toLowerCase()} recommended for ${cfg.target}.`,
+          });
+          return;
+        }
         ctx.setServiceStatus(cfg.target, "healthy");
         ctx.resetServiceTarget(cfg.target);
         ctx.step("resolved");
@@ -315,6 +402,12 @@ export function buildStandardScenario(
       atMs: T.decay,
       label: "decay",
       run: (ctx) => {
+        if (verdict !== "execute") {
+          // No action ran, so nothing was fixed — the signals simply fade, as
+          // untreated transients do. The incident stays escalated regardless.
+          ctx.resetServiceTarget(cfg.target);
+          ctx.setServiceStatus(cfg.target, "healthy");
+        }
         ctx.setAnomaly({
           score: 0.08,
           baseline: "normal",
@@ -470,7 +563,7 @@ export const latencyInjectionScenario = buildStandardScenario({
   signature: "LATENCY-BURST",
   match: 0.86,
   diagnosisSummary: "Artificial response delay in the request path; CPU normal.",
-  policyId: "CRASH-01",
+  policyId: "LATENCY-01",
   actionKind: "restart_container",
   actionLabel: "Restart container",
   actedLine: "orders-service container restarted",

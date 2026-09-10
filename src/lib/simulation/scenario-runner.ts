@@ -77,6 +77,25 @@ export interface OpenIncidentInput {
 export type NotifyLevel = "info" | "success" | "warning" | "error";
 
 /**
+ * What the safety layer decided about a requested automatic action.
+ *
+ *   execute  — allowed and committed; the scenario may change real state.
+ *   dry_run  — simulated only; nothing may be restarted, and the incident ends
+ *              as a recommendation awaiting approval.
+ *   blocked  — a guardrail refused it (too many recent actions on the service);
+ *              the run escalates to an operator instead.
+ */
+export type RemediationVerdict = "execute" | "dry_run" | "blocked";
+
+export interface RemediateInput {
+  serviceId: string;
+  policyId: string;
+  /** Machine action name, e.g. "restart_container". */
+  actionKind: string;
+  incidentId: string | null;
+}
+
+/**
  * The controlled surface a scenario step may touch. The engine binds these to
  * itself + the store, so scenarios stay declarative and testable.
  */
@@ -100,6 +119,13 @@ export interface ScenarioContext {
   runConsole(patch: Partial<ChaosRunState>): void;
   /** Record a passed post-remediation health check in the run console. */
   healthCheck(text: string): void;
+  /**
+   * Ask the safety layer for permission to run an automatic action. This is
+   * the ONLY way a scenario may remediate: the engine owns the guardrail
+   * counters and the dry-run switch, writes the audit trail, and narrates the
+   * refusal into the terminal. Scenarios just branch on the verdict.
+   */
+  remediate(input: RemediateInput): RemediationVerdict;
   /** Shift the mean the noise walk reverts toward for a service. */
   setServiceTarget(serviceId: string, patch: Partial<ServiceMetrics>): void;
   /**
