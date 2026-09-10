@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, Menu, Search } from "lucide-react";
+import { useTheme } from "next-themes";
+import { Bell, Info, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
 import { cn } from "cn";
 import { numeric } from "@/lib/utils";
 import { ENVIRONMENTS, OPERATOR, TIME_RANGES } from "@/lib/mock-data/constants";
@@ -11,8 +12,16 @@ import type { EnvironmentId, Severity, TimeRange } from "@/lib/types";
 import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Popover,
   PopoverContent,
@@ -52,6 +61,52 @@ function formatEventTime(t: number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+function ThemeMenu() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        aria-label="Account and theme"
+      >
+        <Avatar size="sm">
+          <AvatarFallback>{OPERATOR.initials}</AvatarFallback>
+        </Avatar>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuLabel className="font-normal">
+          <div className="text-sm text-text">{OPERATOR.name}</div>
+          <div className="text-xs text-muted">{OPERATOR.role}</div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Theme</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={mounted ? (theme ?? "dark") : "dark"}
+          onValueChange={(v) => {
+            if (v) setTheme(v);
+          }}
+        >
+          <DropdownMenuRadioItem value="dark" className="gap-2">
+            <Moon className="size-4 text-muted" strokeWidth={1.75} />
+            Dark
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light" className="gap-2">
+            <Sun className="size-4 text-muted" strokeWidth={1.75} />
+            Light
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="system" className="gap-2">
+            <Monitor className="size-4 text-muted" strokeWidth={1.75} />
+            System
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
   const live = useSentinelStore((s) => s.live);
   const environment = useSentinelStore((s) => s.environment);
@@ -80,7 +135,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
     .reverse();
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-bg/80 pl-3 pr-4 backdrop-blur-md">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-bg pl-3 pr-4">
       <Button
         variant="ghost"
         size="icon-sm"
@@ -97,7 +152,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
           if (v) setEnvironment(v as EnvironmentId);
         }}
       >
-        <SelectTrigger className="hidden h-8 text-sm sm:flex">
+        <SelectTrigger className="hidden h-8 border-transparent bg-transparent text-sm shadow-none hover:bg-hover dark:bg-transparent dark:hover:bg-hover sm:flex">
           <SelectValue />
         </SelectTrigger>
         <SelectContent align="start" alignItemWithTrigger={false}>
@@ -112,18 +167,18 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
       <button
         type="button"
         onClick={() => (live ? engine.pause() : engine.resume())}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-2 hover:bg-elevated"
+        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-2 hover:bg-hover"
         aria-pressed={live}
       >
         <span
           className={cn(
             "size-1.5 rounded-full",
-            live ? "bg-brand" : "bg-muted",
+            live ? "bg-ok" : "bg-muted",
             live && !reduced && "animate-pulse",
           )}
         />
-        <span className={cn("font-medium", live ? "text-brand" : "text-muted")}>
-          {live ? "LIVE" : "PAUSED"}
+        <span className="text-text-2">
+          {live ? "Live" : "Paused"}
         </span>
       </button>
 
@@ -147,7 +202,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
               className={cn(
                 "h-7 px-2 text-xs",
                 timeRange === range
-                  ? "bg-elevated text-text"
+                  ? "bg-selected text-text"
                   : "text-muted hover:text-text",
               )}
             >
@@ -162,7 +217,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
             if (v) setTimeRange(v as TimeRange);
           }}
         >
-          <SelectTrigger className="h-7 text-xs lg:hidden">
+          <SelectTrigger className="h-7 border-transparent bg-transparent text-xs shadow-none hover:bg-hover dark:bg-transparent dark:hover:bg-hover lg:hidden">
             <SelectValue />
           </SelectTrigger>
           <SelectContent align="end" alignItemWithTrigger={false}>
@@ -176,7 +231,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
 
         <button
           type="button"
-          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-2 hover:bg-elevated"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-2 hover:bg-hover"
           aria-label="Search"
         >
           <Search className="size-4 text-muted" strokeWidth={1.75} />
@@ -233,34 +288,31 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
           </PopoverContent>
         </Popover>
 
-        <Avatar size="sm" className="hidden sm:flex">
-          <AvatarFallback>{OPERATOR.initials}</AvatarFallback>
-        </Avatar>
+        <ThemeMenu />
 
         <span className="hidden items-center gap-1 text-xs text-text-2 min-[1440px]:inline-flex">
           <AnimatedNumber value={servicesOnline} />
           <span>services online</span>
         </span>
 
-        <Badge
-          variant="outline"
-          className="hidden h-6 rounded-full border-border text-xs text-text-2 min-[1280px]:inline-flex"
-        >
-          Demo Mode · Simulated data
-        </Badge>
+        <span className="hidden items-center gap-1 text-xs text-muted min-[1280px]:inline-flex">
+          <Info className="size-3.5 shrink-0" strokeWidth={1.75} />
+          Demo · simulated data
+        </span>
         <Tooltip>
           <TooltipTrigger
             render={
-              <Badge
-                variant="outline"
-                className="inline-flex h-6 rounded-full border-border text-xs text-text-2 min-[1280px]:hidden"
+              <button
+                type="button"
+                className="inline-flex items-center text-muted min-[1280px]:hidden"
+                aria-label="Demo · simulated data"
               />
             }
           >
-            Demo
+            <Info className="size-3.5" strokeWidth={1.75} />
           </TooltipTrigger>
-          <TooltipContent className="border border-border bg-elevated text-text">
-            Demo Mode · Simulated data
+          <TooltipContent className="border border-border bg-panel text-text">
+            Demo · simulated data
           </TooltipContent>
         </Tooltip>
       </div>

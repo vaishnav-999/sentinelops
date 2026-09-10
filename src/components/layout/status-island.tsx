@@ -79,14 +79,6 @@ const ISLAND_COPY: Record<
   escalated: { label: "Escalated", tone: "crit" },
 };
 
-const TONE_TEXT: Record<"ok" | "ai" | "brand" | "warn" | "crit", string> = {
-  ok: "text-ok",
-  ai: "text-ai",
-  brand: "text-brand",
-  warn: "text-warn",
-  crit: "text-crit",
-};
-
 const TONE_DOT: Record<"ok" | "ai" | "brand" | "warn" | "crit", string> = {
   ok: "bg-ok",
   ai: "bg-ai",
@@ -95,12 +87,12 @@ const TONE_DOT: Record<"ok" | "ai" | "brand" | "warn" | "crit", string> = {
   crit: "bg-crit",
 };
 
-const TONE_GLOW: Record<"ok" | "ai" | "brand" | "warn" | "crit", string> = {
-  ok: "",
-  ai: "shadow-[0_0_8px_var(--ai)]",
-  brand: "shadow-[0_0_8px_var(--brand)]",
-  warn: "shadow-[0_0_8px_var(--warn)]",
-  crit: "shadow-[0_0_8px_var(--crit)]",
+const TONE_TEXT: Record<"ok" | "ai" | "brand" | "warn" | "crit", string> = {
+  ok: "text-ok-text",
+  ai: "text-ai-text",
+  brand: "text-brand-text",
+  warn: "text-warn-text",
+  crit: "text-crit-text",
 };
 
 function actionText(
@@ -138,6 +130,7 @@ export function StatusIsland() {
   const copy = ISLAND_COPY[island];
   const target = anomaly.serviceId;
   const unhealthy = island !== "operational";
+  const emphasizeLabel = island === "escalated" || copy.tone === "crit";
 
   let elapsed = 0;
   if (startedAt !== null) {
@@ -149,18 +142,22 @@ export function StatusIsland() {
   return (
     <Popover>
       <PopoverTrigger
-        className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5"
+        className="flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-1.5"
         aria-label={copy.label}
       >
         <span
           className={cn(
             "size-1.5 shrink-0 rounded-full",
             TONE_DOT[copy.tone],
-            unhealthy && TONE_GLOW[copy.tone],
             unhealthy && !reduced && "animate-pulse",
           )}
         />
-        <span className={cn("text-sm font-medium", TONE_TEXT[copy.tone])}>
+        <span
+          className={cn(
+            "text-sm font-medium",
+            emphasizeLabel ? TONE_TEXT[copy.tone] : "text-text-2",
+          )}
+        >
           {copy.label}
         </span>
         {target && unhealthy ? (
@@ -178,8 +175,8 @@ export function StatusIsland() {
                   className={cn(
                     "text-xs",
                     tone === "active" && TONE_TEXT[copy.tone],
-                    tone === "complete" && "text-ok",
-                    tone === "failed" && "text-crit",
+                    tone === "complete" && "text-ok-text",
+                    tone === "failed" && "text-crit-text",
                     tone === "pending" && "text-muted",
                     tone === "active" && "font-medium",
                   )}

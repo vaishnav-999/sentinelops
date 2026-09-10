@@ -90,7 +90,7 @@ function RailTip({
       </TooltipTrigger>
       <TooltipContent
         side="right"
-        className="border border-border bg-elevated text-text"
+        className="border border-border bg-panel text-text"
       >
         {label}
       </TooltipContent>
@@ -171,7 +171,7 @@ export function Sidebar({
             </TooltipTrigger>
             <TooltipContent
               side="right"
-              className="border border-border bg-elevated text-text"
+              className="border border-border bg-panel text-text"
             >
               Expand sidebar
             </TooltipContent>
@@ -198,7 +198,7 @@ export function Sidebar({
                 {active ? (
                   <motion.span
                     layoutId="nav-active"
-                    className="absolute inset-0 rounded-md bg-elevated"
+                    className="absolute inset-0 rounded-md bg-selected"
                     transition={MOTION}
                   />
                 ) : null}

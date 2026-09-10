@@ -12,6 +12,7 @@ Full spec: docs/SPEC.md — read only the sections a task names.
 ## Stack (do not change)
 - Next.js App Router, TypeScript strict, src/ directory, alias @/*
 - Tailwind CSS + shadcn/ui, lucide-react icons
+- next-themes for dark/light/system (`data-theme`)
 - Motion: import { motion, AnimatePresence, MotionConfig } from "motion/react"
 - Recharts is the ONLY chart library
 - Zustand for global state
@@ -45,25 +46,50 @@ src/lib/api            SentinelClient interface + mock and http clients
 - No Math.random(), Date.now() or locale date formatting during server render. Client-only init.
 - No hardcoded metric numbers inside JSX; data comes from typed store/mock data.
 
-## Design system (locked — overrides anything else)
+## Design system (locked — overrides SPEC §5 and §6)
 - Type scale only 12/14/16/20/24/32px. Body 14. Labels 12px muted, sentence case. Weights 400/500;
-  600 only for page titles. Metric values: Geist Mono, 500, tabular-nums.
+  600 only for page titles. UI: IBM Plex Sans 400/500/600. Metrics/ids/timestamps/logs: IBM Plex Mono
+  400/500, tabular-nums. Geist is removed.
 - Spacing on a 4px grid only: panel padding 16, gap between panels 12, section gap 24.
 - Radius: 6px controls, 8px panels. Pills only for status badges.
-- Surfaces: page #07090D, panel #0D1117, raised #111722. 1px borders #1C2635.
-  No shadows except popovers, dialogs, sheets.
-- Color roles: cyan #31D7FF only for primary action, focus ring, LIVE indicator, selected chart series.
-  Status colors (ok #39E58C, warn #FFC857, crit #FF5D73) only as text, dots, 2px rails, chart lines;
-  badges = ~12% tint background + full-color text. Purple #9D7BFF only for ML/anomaly data.
-- Text: #F5F7FA primary, #93A4B8 secondary, #66758A muted.
+- Themes via CSS variables on `:root` / `[data-theme]` with next-themes (`attribute="data-theme"`,
+  default `"dark"`, no flash on load). Theme toggle: Dark / Light / System in the avatar dropdown.
+  Both themes must look intentional; test every component in both.
+- Surfaces / text / status (Radix Slate). Solid colors = dots, 2px rails, chart lines, primary button.
+  Text colors = labels and values. Badge background = solid × theme badge tint (14% dark / 10% light).
+
+  DARK (default):
+  bg #111113 | panel #18191B | hover #212225 | selected #272A2D
+  border #2E3135 | border-strong #363A3F
+  text #EDEEF0 | text-2 #B0B4BA | muted #777B84
+  brand solid #0090FF | brand text #70B8FF
+  ok solid #30A46C | ok text #3DD68C
+  warn solid #FFC53D | warn text #FFCA16
+  crit solid #E5484D | crit text #FF9592
+  ai solid #6E56CF | ai text #BAA7FF
+
+  LIGHT:
+  bg #F9F9FB | panel #FFFFFF | hover #F0F0F3 | selected #E8E8EC
+  border #E0E1E6 | border-strong #D9D9E0
+  text #1C2024 | text-2 #60646C | muted #80838D
+  brand solid #0090FF | brand text #0D74CE
+  ok solid #30A46C | ok text #218358
+  warn solid #FFC53D | warn text #AB6400
+  crit solid #E5484D | crit text #CE2C31
+  ai solid #6E56CF | ai text #6550B9
+  popovers/sheets: subtle shadow 0 4px 16px rgb(0 0 0 / 0.08)
+
+- brand = blue #0090FF; cyan is no longer used. Map shadcn tokens (background, card, popover, primary,
+  muted, accent, border, input, ring, destructive) onto these. No raw hex in components.
 - Icons: lucide only, 16px, stroke 1.75, muted. Not every label gets an icon. No emojis.
 - Motion: 150–200ms ease-out, no springs/bounce, only on state change. Continuous motion only for
   the LIVE dot and non-healthy status indicators. Respect prefers-reduced-motion.
 - Charts: exact palette; muted small axes; horizontal gridlines only, low opacity; 1.5px strokes;
   no dots on lines; direct labels instead of legends.
-- Forbidden: glow (except non-healthy status dots), blur (except top bar), gradients, gradient text,
-  aurora/shader/animated backgrounds, animated or shimmering borders, spotlight hovers, 3D cards,
-  cards inside cards, tinted icon squares on every card, marketing copy, suspiciously round numbers.
+- Forbidden: glow (except non-healthy status dots), blur (except top bar when content scrolls under),
+  gradients, gradient text, aurora/shader/animated backgrounds, animated or shimmering borders,
+  spotlight hovers, 3D cards, cards inside cards, tinted icon squares on every card, marketing copy,
+  suspiciously round numbers.
 - Maximum one level of container; use dividers and section headers instead of nesting.
 - Only two visually special elements: the Sentinel Status Island and the Chaos Lab run console.
 - Density over whitespace. Must look like a shipped observability product, not a template.

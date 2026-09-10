@@ -27,7 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex h-svh overflow-x-hidden bg-bg">
           <aside
             className={cn(
-              "hidden shrink-0 overflow-hidden border-r border-border bg-bg-2 md:block",
+              "hidden shrink-0 overflow-hidden border-r border-border bg-bg md:block",
               !reducedMotion &&
                 "transition-[width] duration-200 ease-out motion-reduce:transition-none",
             )}
@@ -40,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <SheetContent
               side="left"
               showCloseButton={false}
-              className="w-[220px] border-border bg-bg-2 p-0 sm:max-w-[220px]"
+              className="w-[220px] border-border bg-bg p-0 sm:max-w-[220px]"
             >
               <SheetTitle className="sr-only">Navigation</SheetTitle>
               <Sidebar
