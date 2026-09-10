@@ -117,6 +117,15 @@ export interface Container {
   /** Memory utilisation, percent. */
   memory: number;
   createdAt: number;
+  /** Published port, mirrored from the service it backs. */
+  port?: number;
+  /** Requests or jobs per minute currently handled by this container. */
+  requests?: number;
+  /**
+   * Engine clock of the last agent heartbeat. The engine refreshes it on a
+   * fixed cadence, so the detail sheet can render a live "3s ago".
+   */
+  heartbeatAt?: number;
 }
 
 export type InfraNodeKind =
@@ -127,6 +136,24 @@ export type InfraNodeKind =
   | "cache"
   | "database";
 
+/**
+ * Where a node sits on the topology canvas, in the fixed 900x500 coordinate
+ * space the map is drawn in. Node boxes are centred on the point, and the SVG
+ * edge layer shares the same viewBox, so lines and boxes can never drift.
+ */
+export interface InfraNodeLayout {
+  x: number;
+  y: number;
+}
+
+/** Live figures the engine writes onto a topology node each tick. */
+export interface InfraNodeMetrics {
+  cpu: number;
+  memory: number;
+  /** Requests or jobs per minute. */
+  requests: number;
+}
+
 export interface InfraNode {
   id: string;
   label: string;
@@ -134,6 +161,11 @@ export interface InfraNode {
   /** Linked service, when the node represents a monitored service. */
   serviceId?: string;
   status?: ServiceStatus;
+  layout: InfraNodeLayout;
+  /** Absent on the Internet node, which carries no telemetry. */
+  metrics?: InfraNodeMetrics;
+  /** Engine clock of the last heartbeat from this node's agent. */
+  heartbeatAt?: number;
   meta?: {
     port?: number;
     containerId?: string;
@@ -141,7 +173,7 @@ export interface InfraNode {
   };
 }
 
-export type InfraEdgeKind = "request" | "data" | "cache";
+export type InfraEdgeKind = "request" | "data" | "cache" | "queue";
 
 export interface InfraEdge {
   id: string;
@@ -172,6 +204,12 @@ export interface Anomaly {
   detectedAt?: number;
   note?: string;
   contributions?: FeatureContribution[];
+}
+
+/** One point on the anomaly-score timeline (ML Insights). */
+export interface AnomalyPoint {
+  t: number;
+  score: number;
 }
 
 export type DetectorKind = "threshold" | "ml";
@@ -528,6 +566,25 @@ export interface SentinelSettings {
   guardrailWindowSec: number;
   /** Minimum gap the engine leaves between two actions on a service, seconds. */
   cooldownSec: number;
+
+  /* -- Frontend-only preferences (no backend contract yet, SPEC 26) ------ */
+
+  /** Telemetry scrape interval shown on Settings, seconds. Read-only. */
+  scrapeIntervalSec: number;
+  /** Anomaly scoring pass runs on every telemetry batch. */
+  anomalyScan: boolean;
+  /** Signature-match floor a policy must clear before it may run, 0-1. */
+  decisionThreshold: number;
+  /** Learned-baseline window the detector trains over, hours. */
+  baselineWindowHours: number;
+  /** Show toast notifications for platform events. */
+  notifyToasts: boolean;
+  /** Restrict toasts to critical / escalation events only. */
+  notifyCriticalOnly: boolean;
+  /** Run post-remediation health verification before closing an incident. */
+  verifyAfterRemediation: boolean;
+  /** Policies classified restricted always need an operator. */
+  blockRestrictedActions: boolean;
 }
 
 /**

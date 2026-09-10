@@ -234,6 +234,17 @@ export function buildStandardScenario(
           actionKind: cfg.actionKind,
           incidentId,
         });
+        if (verdict === "not_allowed") {
+          escalate(ctx, {
+            incidentId,
+            target: cfg.target,
+            policyNote: `Automatic remediation is off: ${cfg.actionKind} (${cfg.policyId}) requires approval`,
+            outcomeLabel: "Awaiting operator approval",
+            policyStageDetail: "Automatic remediation disabled in Settings.",
+            toast: `${cfg.actionLabel} on ${cfg.target} needs operator approval.`,
+          });
+          return;
+        }
         if (verdict === "blocked") {
           escalate(ctx, {
             incidentId,
@@ -292,7 +303,7 @@ export function buildStandardScenario(
       atMs: T.acted,
       label: "acted",
       run: (ctx) => {
-        if (verdict === "blocked") return;
+        if (verdict === "blocked" || verdict === "not_allowed") return;
         if (verdict === "dry_run") {
           // Nothing was restarted. The fault is untreated, so the metrics only
           // ease back on their own as the walk drifts toward a calmer target.
@@ -363,7 +374,7 @@ export function buildStandardScenario(
       atMs: T.resolve,
       label: "resolved",
       run: (ctx) => {
-        if (verdict === "blocked") return;
+        if (verdict === "blocked" || verdict === "not_allowed") return;
         if (verdict === "dry_run") {
           escalate(ctx, {
             incidentId,

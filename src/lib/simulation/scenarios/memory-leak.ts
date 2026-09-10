@@ -215,6 +215,17 @@ export const memoryLeakScenario: ScenarioDefinition = {
           actionKind: ACTION,
           incidentId,
         });
+        if (verdict === "not_allowed") {
+          escalate(ctx, {
+            incidentId,
+            target: TARGET,
+            policyNote: `Automatic remediation is off: ${ACTION} (${POLICY}) requires approval`,
+            outcomeLabel: "Awaiting operator approval",
+            policyStageDetail: "Automatic remediation disabled in Settings.",
+            toast: `${ACTION} on ${TARGET} needs operator approval.`,
+          });
+          return;
+        }
         if (verdict === "blocked") {
           escalate(ctx, {
             incidentId,
@@ -273,7 +284,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 18000,
       label: "restarted",
       run: (ctx) => {
-        if (verdict === "blocked") return;
+        if (verdict === "blocked" || verdict === "not_allowed") return;
         if (verdict === "dry_run") {
           // Nothing was restarted. The heap is still leaking, so the metrics
           // only ease back on their own as the walk drifts toward a calmer
@@ -354,7 +365,7 @@ export const memoryLeakScenario: ScenarioDefinition = {
       atMs: 26600,
       label: "resolved",
       run: (ctx) => {
-        if (verdict === "blocked") return;
+        if (verdict === "blocked" || verdict === "not_allowed") return;
         if (verdict === "dry_run") {
           escalate(ctx, {
             incidentId,

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { PageSkeleton } from "@/components/layout/page-skeleton";
+import { LogsView } from "@/components/logs/logs-view";
 
 export const metadata: Metadata = {
   title: "Logs — SentinelOps",
@@ -10,10 +10,10 @@ export default function LogsPage() {
   return (
     <>
       <PageHeader
-        title="Logs"
-        description="Live application and detector log stream."
+        title="Live Logs"
+        description="Application, detector and auto-heal log stream."
       />
-      <PageSkeleton />
+      <LogsView />
     </>
   );
 }

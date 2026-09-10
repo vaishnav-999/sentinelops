@@ -79,13 +79,20 @@ export type NotifyLevel = "info" | "success" | "warning" | "error";
 /**
  * What the safety layer decided about a requested automatic action.
  *
- *   execute  — allowed and committed; the scenario may change real state.
- *   dry_run  — simulated only; nothing may be restarted, and the incident ends
- *              as a recommendation awaiting approval.
- *   blocked  — a guardrail refused it (too many recent actions on the service);
- *              the run escalates to an operator instead.
+ *   execute      — allowed and committed; the scenario may change real state.
+ *   dry_run      — simulated only; nothing may be restarted, and the incident
+ *                  ends as a recommendation awaiting approval.
+ *   blocked      — a guardrail refused it (too many recent actions on the
+ *                  service); the run escalates to an operator instead.
+ *   not_allowed  — automatic remediation is switched off in Settings, so no
+ *                  policy may execute without an operator. The run stops before
+ *                  acting and escalates.
  */
-export type RemediationVerdict = "execute" | "dry_run" | "blocked";
+export type RemediationVerdict =
+  | "execute"
+  | "dry_run"
+  | "blocked"
+  | "not_allowed";
 
 export interface RemediateInput {
   serviceId: string;

@@ -114,8 +114,9 @@ export class MockSentinelClient implements SentinelClient {
     const state = sentinelStore.get();
     return {
       model: "Isolation Forest",
-      status: "active",
-      baselineWindowHours: 24,
+      // No trained model ships with this build; the UI says so too.
+      status: "training",
+      baselineWindowHours: state.settings.baselineWindowHours,
       anomalyScore: state.anomaly.score,
       detectors: state.detectors,
       contributions: state.anomaly.contributions ?? DEFAULT_CONTRIBUTIONS,

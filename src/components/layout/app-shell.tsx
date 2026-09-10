@@ -11,6 +11,7 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { CommandPalette } from "@/components/layout/command-palette";
 import { GlobalHotkeys } from "@/components/layout/hotkeys";
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopBar } from "@/components/layout/top-bar";
@@ -24,6 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <MotionConfig reducedMotion={reducedMotion ? "always" : "user"}>
       <TooltipProvider delay={200}>
         <GlobalHotkeys />
+        <CommandPalette />
         <div className="flex h-svh overflow-x-hidden bg-bg">
           <aside
             className={cn(

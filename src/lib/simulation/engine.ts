@@ -1,6 +1,9 @@
 import type {
+  AnomalyPoint,
   ChaosRunState,
+  Container,
   ContainerStatus,
+  InfraNode,
   DetectorResult,
   EventKind,
   ExperimentRun,
@@ -23,7 +26,13 @@ import type {
   TerminalLine,
 } from "@/lib/types";
 import { CAPS, sentinelStore } from "@/lib/store/sentinel-store";
-import { NEXT_INCIDENT_SEQ, RING_SIZE, SEED_NOW } from "@/lib/mock-data";
+import {
+  NEXT_INCIDENT_SEQ,
+  POSTGRES_BASELINE,
+  RING_SIZE,
+  SEED_NOW,
+} from "@/lib/mock-data";
+import { ambientLogs } from "./log-stream";
 import { createRng, round, type Rng } from "./noise";
 import {
   jitteredTiming,
@@ -94,6 +103,15 @@ const TRAIL_INTERVAL_TICKS = 5;
 /** Idle-event spacing in simulated ms — calm, not one per tick (SPEC §8). */
 const CALM_EVENT_MIN_MS = 4000;
 const CALM_EVENT_JITTER_MS = 2000;
+
+/** Agent heartbeat cadence, simulated ms. Drives the "3s ago" in the sheet. */
+const HEARTBEAT_INTERVAL_MS = 5000;
+
+/** How many replicas back each service, for per-container throughput share. */
+const REPLICA_COUNT: Record<string, number> = {
+  "api-gateway": 2,
+  "orders-service": 2,
+};
 
 /** 3 · 2 · 1 before the fault lands (SPEC §13). */
 export const COUNTDOWN_MS = 3000;
@@ -171,6 +189,8 @@ export class SimulationEngine {
   /** Engine clock the next calm idle event is due; 0 = due immediately. */
   private nextCalmEventAt = 0;
   private calmIndex = 0;
+  /** Engine clock the next container/node heartbeat is due. */
+  private nextHeartbeatAt = 0;
 
   /** Per-service walk targets (the mean the noise reverts toward). */
   private targets: Record<string, ServiceMetrics> = {};
@@ -388,11 +408,14 @@ export class SimulationEngine {
   reset(): void {
     this.cancelRun("cancelled");
 
-    // Experiment history is research output — it survives a demo reset.
-    const runs = sentinelStore.get().experimentRuns;
+    // Experiment history is research output — it survives a demo reset. So do
+    // the operator's own settings: Reset Demo restores the *system* to its
+    // seeded healthy state, it does not silently re-enable auto-remediation.
+    const { experimentRuns: runs, settings } = sentinelStore.get();
 
     this.recoveredSince = null;
     this.nextCalmEventAt = 0;
+    this.nextHeartbeatAt = 0;
     this.calmIndex = 0;
     this.ticks = 0;
     this.seq = 0;
@@ -406,7 +429,12 @@ export class SimulationEngine {
     this.runTiming = nominalTiming();
 
     sentinelStore.get().reset();
-    sentinelStore.set({ experimentRuns: runs, live: true, connection: "ok" });
+    sentinelStore.set({
+      experimentRuns: runs,
+      settings,
+      live: true,
+      connection: "ok",
+    });
     this.rebaseSeedIncidents();
     this.seedTargets();
   }
@@ -528,6 +556,16 @@ export class SimulationEngine {
 
     sentinelStore.set({ services, histories, cluster, clusterHistory });
 
+    // 4a2) Mirror live telemetry onto the containers and topology nodes, so
+    //      /infrastructure moves with a chaos run instead of showing seeds.
+    this.tickTopology(services);
+
+    // 4a3) Anomaly-score timeline, for the /ml-insights chart.
+    const point: AnomalyPoint = { t: this.clock, score: state.anomaly.score };
+    sentinelStore.set((s) => ({
+      anomalyHistory: pushRing(s.anomalyHistory, point, CAPS.anomalyHistory),
+    }));
+
     // 4b) Coarse trail, sampled every few ticks, backs the "vs 5 min ago" deltas.
     if (this.ticks % TRAIL_INTERVAL_TICKS === 0) {
       sentinelStore.set((s) => ({
@@ -557,6 +595,97 @@ export class SimulationEngine {
       this.nextCalmEventAt =
         this.clock + CALM_EVENT_MIN_MS + Math.floor(this.rng() * CALM_EVENT_JITTER_MS);
     }
+
+    // 7) Ambient application logs. Unlike the event stream these never go
+    //    quiet: a real platform keeps logging, and a chaos run shows up as a
+    //    WARN/ERROR burst from the affected service (simulation/log-stream.ts).
+    this.pushAmbientLogs(services);
+  }
+
+  /**
+   * Containers and topology nodes follow their service's live metrics, so a
+   * fault is visible on /infrastructure at the same instant it is on /overview.
+   * Heartbeats tick on their own slower cadence.
+   */
+  private tickTopology(services: Service[]): void {
+    const byId = new Map(services.map((svc) => [svc.id, svc]));
+    const beat = this.clock >= this.nextHeartbeatAt;
+    if (beat) this.nextHeartbeatAt = this.clock + HEARTBEAT_INTERVAL_MS;
+
+    sentinelStore.set((state) => {
+      const containers: Container[] = state.containers.map((c) => {
+        const svc = c.serviceId ? byId.get(c.serviceId) : undefined;
+        if (!svc) return c;
+        const replicas = REPLICA_COUNT[svc.id] ?? 1;
+        // Replicas of one service are never identical; a small stable-ish
+        // offset per container keeps the two rows from reading as a copy.
+        const skew = 1 + (this.rng() - 0.5) * 0.06;
+        return {
+          ...c,
+          cpu: round(Math.max(0, svc.metrics.cpu * skew), 1),
+          memory: round(Math.max(0, svc.metrics.memory * skew), 1),
+          requests: Math.round((svc.metrics.throughput / replicas) * skew),
+          // A restarting container reports no heartbeat until it is back.
+          heartbeatAt:
+            c.status === "restarting" || c.status === "stopped"
+              ? c.heartbeatAt
+              : beat
+                ? this.clock
+                : c.heartbeatAt,
+        };
+      });
+
+      const infraNodes: InfraNode[] = state.infraNodes.map((n) => {
+        if (n.kind === "internet") return n;
+        const svc = n.serviceId ? byId.get(n.serviceId) : undefined;
+        if (svc) {
+          return {
+            ...n,
+            status: svc.status,
+            metrics: {
+              cpu: round(svc.metrics.cpu, 1),
+              memory: round(svc.metrics.memory, 1),
+              requests: Math.round(svc.metrics.throughput),
+            },
+            heartbeatAt: beat ? this.clock : n.heartbeatAt,
+          };
+        }
+        // PostgreSQL has no Service record; it walks gently around its own
+        // baseline so the node is alive rather than a frozen constant.
+        const prev = n.metrics ?? { ...POSTGRES_BASELINE };
+        const drift = (base: number, value: number, amp: number) =>
+          round(value + (base - value) * 0.2 + (this.rng() - 0.5) * amp, 1);
+        return {
+          ...n,
+          status: "healthy",
+          metrics: {
+            cpu: drift(POSTGRES_BASELINE.cpu, prev.cpu, 3),
+            memory: drift(POSTGRES_BASELINE.memory, prev.memory, 1.6),
+            requests: Math.round(drift(POSTGRES_BASELINE.requests, prev.requests, 90)),
+          },
+          heartbeatAt: beat ? this.clock : n.heartbeatAt,
+        };
+      });
+
+      return { containers, infraNodes };
+    });
+  }
+
+  /** Draw and append this tick's ambient log lines in a single store write. */
+  private pushAmbientLogs(services: Service[]): void {
+    const state = sentinelStore.get();
+    const entries = ambientLogs({
+      services,
+      now: this.clock,
+      tickSpanMs: this.tickMs * this.timeScale,
+      rng: this.rng,
+      anomalyScore: state.anomaly.score,
+      remediating:
+        state.scenarioPhase === "remediating" || state.scenarioPhase === "verifying",
+      nextId: () => this.nextId("log"),
+    });
+    if (entries.length === 0) return;
+    sentinelStore.set((s) => ({ logs: cap([...s.logs, ...entries], CAPS.logs) }));
   }
 
   /** 3 → 2 → 1 in the run console while the fault is pending. */
@@ -799,6 +928,17 @@ export class SimulationEngine {
           },
         },
       }));
+
+    // The master switch comes first: with automatic remediation off, nothing
+    // may execute regardless of guardrail budget or dry-run — the platform
+    // recommends and hands the incident to an operator.
+    if (!settings.autoRemediation) {
+      this.pushTerminal(
+        `automatic remediation disabled — ${input.actionKind} requires operator approval`,
+        "error",
+      );
+      return "not_allowed";
+    }
 
     if (recent.length >= settings.restartLimit) {
       // Prune the expired timestamps while we are here.

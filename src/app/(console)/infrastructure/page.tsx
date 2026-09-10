@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { PageSkeleton } from "@/components/layout/page-skeleton";
+import { InfrastructureView } from "@/components/infrastructure/infrastructure-view";
 
 export const metadata: Metadata = {
   title: "Infrastructure — SentinelOps",
@@ -13,7 +13,7 @@ export default function InfrastructurePage() {
         title="Infrastructure"
         description="Topology of services, containers and data stores."
       />
-      <PageSkeleton />
+      <InfrastructureView />
     </>
   );
 }

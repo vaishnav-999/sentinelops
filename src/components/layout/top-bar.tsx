@@ -124,6 +124,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
   const setTimeRange = useSentinelStore((s) => s.setTimeRange);
   const servicesOnline = useSentinelStore((s) => s.cluster.servicesOnline);
   const events = useSentinelStore((s) => s.events);
+  const setCommandOpen = useSentinelStore((s) => s.setCommandOpen);
   const reduced = useReducedMotion();
 
   const cluster =
@@ -236,8 +237,9 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
 
         <button
           type="button"
+          onClick={() => setCommandOpen(true)}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-2 hover:bg-hover"
-          aria-label="Search"
+          aria-label="Open command palette"
         >
           <Search className="size-4 text-muted" strokeWidth={1.75} />
           <span className={cn("hidden sm:inline", numeric)}>{shortcut}</span>

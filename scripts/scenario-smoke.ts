@@ -12,10 +12,12 @@
  *   3. Three runs without a reset — the third is refused by the guardrail and
  *      escalates instead of restarting payment-worker a third time.
  *   4. Dry run — recommended, never executed, incident ends escalated.
- *   5. Reset in the middle of remediation — clean healthy state, no incident
+ *   5. Automatic remediation off — the run stops at the policy check and
+ *      escalates as "Awaiting operator approval"; nothing is restarted.
+ *   6. Reset in the middle of remediation — clean healthy state, no incident
  *      stuck mid-stage.
- *   6. Unknown anomaly — ends escalated, and nothing was restarted.
- *   7. No duplicate incident ids, and no timers left running afterwards.
+ *   7. Unknown anomaly — ends escalated, and nothing was restarted.
+ *   8. No duplicate incident ids, and no timers left running afterwards.
  *
  * The engine advances 1 simulated second per tick regardless of `timeScale`,
  * so the compressed run exercises exactly the same step sequence the browser
@@ -355,8 +357,64 @@ async function main(): Promise<void> {
   state().updateSettings({ dryRun: false });
   await resetDemo();
 
-  /* -------- 5. reset in the middle of remediation ---------------------- */
-  console.log("\n5. Reset during remediation");
+  /* -------- 5. automatic remediation switched off ---------------------- */
+  console.log("\n5. Automatic remediation disabled");
+  const containersBeforeManual = state().containers.map((c) => `${c.id}:${c.status}`);
+  state().updateSettings({ autoRemediation: false });
+  await runToCompletion("memory-leak");
+  {
+    const s = state();
+    const run = s.chaosRun;
+    check(run?.outcome === "escalated", "run escalated", run?.outcome);
+    check(run?.action === null, "no remediation action was taken", run?.action);
+    check(
+      run?.steps.every((x) => x.id !== "remediating") ?? false,
+      "no remediating step in the stepper",
+      run?.steps.map((x) => x.id),
+    );
+    check(
+      terminalHas("automatic remediation disabled"),
+      "the refusal was written to the terminal",
+      s.terminalLines.slice(-6).map((l) => l.text),
+    );
+    const incident = liveIncident();
+    check(incident?.status === "escalated", "incident escalated", incident?.status);
+    check(
+      incident?.outcomeLabel === "Awaiting operator approval",
+      "incident labelled as awaiting operator approval",
+      incident?.outcomeLabel,
+    );
+    check(incident?.auto === false, "incident not marked auto-healed", incident?.auto);
+    check(
+      s.executions.at(-1)?.outcome === "escalated",
+      "execution recorded as escalated",
+      s.executions.at(-1)?.outcome,
+    );
+    check(
+      JSON.stringify(s.containers.map((c) => `${c.id}:${c.status}`)) ===
+        JSON.stringify(containersBeforeManual),
+      "payment-worker was never restarted",
+      s.containers.map((c) => `${c.name}:${c.status}`),
+    );
+    check(
+      Object.values(s.guardrails.actionsByService).every((t) => t.length === 0),
+      "a refused action does not consume the guardrail budget",
+      s.guardrails.actionsByService,
+    );
+    check(allHealthy(), "services drifted back to healthy without an action");
+  }
+  // Operator settings survive Reset Demo, so this has to be undone explicitly.
+  await resetDemo();
+  check(
+    state().settings.autoRemediation === false,
+    "Reset Demo keeps the operator's own settings",
+    state().settings.autoRemediation,
+  );
+  state().updateSettings({ autoRemediation: true });
+  await resetDemo();
+
+  /* -------- 6. reset in the middle of remediation ---------------------- */
+  console.log("\n6. Reset during remediation");
   const runsBeforeAbort = state().experimentRuns.length;
   const executionsBeforeAbort = state().executions.length;
   runsStarted += 1;
@@ -400,8 +458,8 @@ async function main(): Promise<void> {
     );
   }
 
-  /* -------- 6. unknown anomaly escalates, never restarts --------------- */
-  console.log("\n6. Unknown anomaly");
+  /* -------- 7. unknown anomaly escalates, never restarts --------------- */
+  console.log("\n7. Unknown anomaly");
   const containersBefore = state().containers.map((c) => `${c.id}:${c.status}`);
   await runToCompletion("unknown-anomaly");
   {
@@ -429,8 +487,8 @@ async function main(): Promise<void> {
     );
   }
 
-  /* -------- 7. teardown: no leftover timers ---------------------------- */
-  console.log("\n7. Teardown");
+  /* -------- 8. teardown: no leftover timers ---------------------------- */
+  console.log("\n8. Teardown");
   await resetDemo();
   check(
     state().executions.length === 6,

@@ -1,5 +1,6 @@
 import type { Container } from "@/lib/types";
 import { HOUR, SEED_NOW } from "./constants";
+import { SEED_SERVICES } from "./services";
 
 /**
  * Eight running app containers backing the six services (orders + gateway run
@@ -89,6 +90,24 @@ export const SEED_CONTAINERS: Container[] = [
   },
 ];
 
+/**
+ * Replica share of a service's throughput. `api-gateway` and `orders-service`
+ * run two containers each, so a single container handles roughly half.
+ */
+const REPLICAS: Record<string, number> = {
+  "api-gateway": 2,
+  "orders-service": 2,
+};
+
 export function cloneSeedContainers(): Container[] {
-  return SEED_CONTAINERS.map((c) => ({ ...c }));
+  return SEED_CONTAINERS.map((c) => {
+    const svc = SEED_SERVICES.find((s) => s.id === c.serviceId);
+    const replicas = c.serviceId ? (REPLICAS[c.serviceId] ?? 1) : 1;
+    return {
+      ...c,
+      port: svc?.port,
+      requests: svc ? Math.round(svc.baseline.throughput / replicas) : undefined,
+      heartbeatAt: SEED_NOW,
+    };
+  });
 }

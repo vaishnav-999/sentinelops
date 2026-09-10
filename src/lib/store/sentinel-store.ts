@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   Anomaly,
+  AnomalyPoint,
   ChaosRunState,
   ClusterMetrics,
   Container,
@@ -48,6 +49,8 @@ export const CAPS = {
   executions: 50,
   /** Coarse trail: 61 samples × TRAIL_INTERVAL_TICKS = a 5-minute window. */
   trail: 61,
+  /** Anomaly-score timeline shown on /ml-insights: 120 ticks ≈ 2 minutes. */
+  anomalyHistory: 120,
 } as const;
 
 /** Default healthy detector pair (Isolation Forest + static threshold). */
@@ -113,6 +116,8 @@ export interface SentinelState {
 
   /* Detection / diagnosis */
   anomaly: Anomaly;
+  /** Rolling anomaly-score timeline, oldest first (ML Insights chart). */
+  anomalyHistory: AnomalyPoint[];
   diagnosis: Diagnosis | null;
   detectors: DetectorResult[];
 
@@ -138,6 +143,8 @@ export interface SentinelState {
   timeRange: TimeRange;
   reducedMotion: boolean;
   sidebarCollapsed: boolean;
+  /** Global command palette (Ctrl/⌘ K, or the top-bar search button). */
+  commandOpen: boolean;
 
   /* Safety */
   settings: SentinelSettings;
@@ -154,6 +161,8 @@ export interface SentinelActions {
   setTimeRange: (range: TimeRange) => void;
   setReducedMotion: (v: boolean) => void;
   toggleReducedMotion: () => void;
+  setCommandOpen: (v: boolean) => void;
+  toggleCommandOpen: () => void;
   setLive: (v: boolean) => void;
   /**
    * Flips the simulated telemetry link. While `"lost"` the engine stops
@@ -198,6 +207,7 @@ export function createInitialState(): SentinelState {
     terminalLines: [],
 
     anomaly: initialAnomaly(),
+    anomalyHistory: [],
     diagnosis: null,
     detectors: initialDetectors(),
 
@@ -214,6 +224,7 @@ export function createInitialState(): SentinelState {
     timeRange: "1h",
     reducedMotion: false,
     sidebarCollapsed: false,
+    commandOpen: false,
 
     settings: {
       autoRemediation: true,
@@ -221,6 +232,14 @@ export function createInitialState(): SentinelState {
       restartLimit: 2,
       guardrailWindowSec: 1800,
       cooldownSec: 120,
+      scrapeIntervalSec: 1,
+      anomalyScan: true,
+      decisionThreshold: 0.7,
+      baselineWindowHours: 24,
+      notifyToasts: true,
+      notifyCriticalOnly: false,
+      verifyAfterRemediation: true,
+      blockRestrictedActions: true,
     },
     guardrails: { actionsByService: {} },
 
@@ -245,6 +264,8 @@ export const useSentinelStore = create<SentinelStore>((set) => ({
   setReducedMotion: (v) => set({ reducedMotion: v }),
   toggleReducedMotion: () =>
     set((s) => ({ reducedMotion: !s.reducedMotion })),
+  setCommandOpen: (commandOpen) => set({ commandOpen }),
+  toggleCommandOpen: () => set((s) => ({ commandOpen: !s.commandOpen })),
   setLive: (live) => set({ live }),
   setConnection: (connection) => set({ connection }),
   updateSettings: (patch) =>
