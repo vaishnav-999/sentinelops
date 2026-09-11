@@ -1,0 +1,11 @@
+services:
+  sentinelops:
+    build: .
+    image: sentinelops:latest
+    container_name: sentinelops
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env.local
+        required: false
+    restart: unless-stopped
