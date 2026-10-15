@@ -8,6 +8,7 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { clusterBaseline, clusterValue } from "@/lib/store/selectors";
 import { METRIC_META, formatMetricValue } from "@/lib/metrics";
+import { SAMPLE_QUALIFIER } from "@/lib/api/mode";
 import { baselineBand, type MetricKey } from "@/lib/simulation/thresholds";
 import {
   BASELINE_LABEL,
@@ -43,7 +44,7 @@ export function AnomalyPanel() {
         title="Anomaly intelligence"
         actions={
           <Badge variant="outline" className="text-muted">
-            Simulated
+            {SAMPLE_QUALIFIER}
           </Badge>
         }
       />

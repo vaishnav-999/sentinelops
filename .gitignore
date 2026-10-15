@@ -36,6 +36,16 @@ yarn-error.log*
 # vercel
 .vercel
 
+# server secrets (the .example stays committed)
+/deploy/sentinel.env
+
+# machine-specific CA certificates for Docker builds
+/target/certs/*.crt
+/backend/certs/*.crt
+
+# python
+__pycache__/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

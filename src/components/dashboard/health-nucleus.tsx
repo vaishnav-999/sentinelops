@@ -8,7 +8,7 @@ import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { healthLabel } from "@/lib/simulation/health";
 import { criticalCount } from "@/lib/store/selectors";
-import { COUNTS } from "@/lib/mock-data/constants";
+import { useFleetCounts } from "@/lib/store/use-fleet-counts";
 import { HEALTH_TONE, TONE_DOT, TONE_STROKE, TONE_TEXT } from "@/lib/tone";
 
 /** Ring geometry in viewBox units; stroke is flat, never glowing. */
@@ -27,6 +27,7 @@ export function HealthNucleus() {
   const online = useSentinelStore((s) => s.cluster.servicesOnline);
   const services = useSentinelStore((s) => s.services);
   const reduced = useReducedMotion();
+  const counts = useFleetCounts();
 
   const label = healthLabel(score);
   const tone = HEALTH_TONE[label];
@@ -34,9 +35,9 @@ export function HealthNucleus() {
   const offset = CIRC * (1 - Math.max(0, Math.min(100, score)) / 100);
 
   const indicators = [
-    { label: "Services", value: `${online}/${COUNTS.services}` },
-    { label: "Containers", value: String(COUNTS.containers) },
-    { label: "Databases", value: String(COUNTS.databases) },
+    { label: "Services", value: `${online}/${counts.services}` },
+    { label: "Containers", value: String(counts.containers) },
+    { label: "Databases", value: String(counts.databases) },
     { label: "Critical", value: String(critical) },
   ];
 

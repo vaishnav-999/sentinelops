@@ -8,6 +8,7 @@ import {
   headlineSentence,
   monitoringSubtitle,
 } from "@/lib/store/selectors";
+import { useFleetCounts } from "@/lib/store/use-fleet-counts";
 
 /**
  * "Good evening. Production is healthy." — the greeting half needs the viewer's
@@ -17,6 +18,7 @@ import {
 export function OverviewHeader() {
   const island = useSentinelStore((s) => s.islandState);
   const mounted = useMounted();
+  const counts = useFleetCounts();
 
   return (
     <PageHeader
@@ -30,7 +32,7 @@ export function OverviewHeader() {
           {headlineSentence(island)}
         </>
       }
-      description={monitoringSubtitle()}
+      description={monitoringSubtitle(counts)}
     />
   );
 }

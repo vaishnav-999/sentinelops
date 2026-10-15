@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { api } from "@/lib/api";
-import { engine } from "@/lib/simulation/engine";
+import { controls } from "@/lib/api/controls";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -41,7 +41,7 @@ export function GlobalHotkeys() {
         void api.injectChaos({ scenario: "memory-leak" });
       } else if (key === "r") {
         event.preventDefault();
-        engine.reset();
+        controls.reset();
       }
     }
     window.addEventListener("keydown", onKey);

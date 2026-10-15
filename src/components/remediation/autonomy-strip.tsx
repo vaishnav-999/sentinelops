@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { autonomyStatus } from "@/lib/remediation";
 import { TONE_BADGE, TONE_DOT, TONE_TEXT } from "@/lib/tone";
+import { SAMPLE_QUALIFIER } from "@/lib/api/mode";
 
 /**
  * The autonomy status strip (SPEC §12), entirely derived from the store: how
@@ -84,7 +85,7 @@ export function AutonomyStrip() {
             <Badge variant="outline" className="font-normal">
               {status.successRatePct === null
                 ? "No executions yet"
-                : `Simulated · ${status.successSamples} executions`}
+                : `${SAMPLE_QUALIFIER} · ${status.successSamples} executions`}
             </Badge>
           </div>
         </Cell>

@@ -2,6 +2,9 @@ import { create } from "zustand";
 import type {
   Anomaly,
   AnomalyPoint,
+  BackendStatus,
+  ModelStatus,
+  ResearchMetrics,
   ChaosRunState,
   ClusterMetrics,
   Container,
@@ -42,6 +45,9 @@ import { aggregateCluster } from "@/lib/simulation/telemetry";
 
 /** Ring-buffer / list caps. */
 export const CAPS = {
+  /** Live mode: incidents kept in memory (the backend keeps the full history). */
+  incidents: 200,
+  experimentRuns: 100,
   events: 200,
   logs: 1000,
   terminal: 200,
@@ -152,6 +158,16 @@ export interface SentinelState {
 
   /* Research */
   experimentRuns: ExperimentRun[];
+
+  /* Live backend (null / false in simulation mode) */
+  /** True once the first backend snapshot has been applied. */
+  liveReady: boolean;
+  /** "disabled" when the backend runs without a password (laptop mode). */
+  authState: "checking" | "signed_out" | "signed_in" | "disabled";
+  authUser: string | null;
+  research: ResearchMetrics | null;
+  model: ModelStatus | null;
+  backend: BackendStatus | null;
 }
 
 export interface SentinelActions {
@@ -244,6 +260,13 @@ export function createInitialState(): SentinelState {
     guardrails: { actionsByService: {} },
 
     experimentRuns: [],
+
+    liveReady: false,
+    authState: "checking",
+    authUser: null,
+    research: null,
+    model: null,
+    backend: null,
   };
 }
 

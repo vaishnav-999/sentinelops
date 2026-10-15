@@ -1,0 +1,39 @@
+# SENTINEL_SITE  a domain (sentinel.example.com) or the server's public IP
+# SENTINEL_TLS   auto     — Let's Encrypt certificate (needs a domain pointing here)
+#                internal — Caddy's own CA (works with a bare IP; the browser
+#                           shows a certificate warning you accept once)
+
+(tls_auto) {
+}
+
+(tls_internal) {
+	tls internal
+}
+
+{$SENTINEL_SITE} {
+	import tls_{$SENTINEL_TLS}
+
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# /api/ai/* are Next.js route handlers (Gemini); everything else under /api
+	# and the WebSocket belong to the FastAPI backend.
+	@backend {
+		path /api/* /ws
+		not path /api/ai/*
+	}
+	handle @backend {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

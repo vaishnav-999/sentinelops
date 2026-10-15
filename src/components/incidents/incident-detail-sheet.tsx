@@ -38,6 +38,7 @@ import {
   type CompareMetric,
 } from "@/lib/incidents";
 import type { Incident, RemediationPolicy, ServiceMetrics } from "@/lib/types";
+import { SAMPLE_QUALIFIER } from "@/lib/api/mode";
 
 /**
  * The incident story, end to end (SPEC 11): what was seen, what it was matched
@@ -286,7 +287,7 @@ function Body({
             )}
           </div>
           <p className="mt-1 text-xs text-muted">
-            Detected to resolved, from this run. Simulated telemetry.
+            Detected to resolved, from this run. {SAMPLE_QUALIFIER} telemetry.
           </p>
         </Section>
 
@@ -322,8 +323,8 @@ function Body({
           )}
         </Section>
 
-        {/* 7. Gemini narrative (later phase) */}
-        <AiIncidentReport incident={incident} />
+        {/* 7. Post-incident narrative */}
+        <AiIncidentReport key={incident.id} incident={incident} />
       </div>
     </>
   );

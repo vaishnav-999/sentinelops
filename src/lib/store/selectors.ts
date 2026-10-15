@@ -2,6 +2,7 @@ import type { ClusterMetrics, IslandState, Service } from "@/lib/types";
 import { COUNTS } from "@/lib/mock-data/constants";
 import { aggregateCluster } from "@/lib/simulation/telemetry";
 import type { MetricKey } from "@/lib/simulation/thresholds";
+import type { FleetCounts } from "./use-fleet-counts";
 
 /**
  * Pure read-models over the store. Components stay dumb: they select state and
@@ -34,12 +35,13 @@ export function greetingFor(hour: number): string {
 }
 
 /** "Monitoring 6 services · 8 containers · 1 database · 1 cache". */
-export function monitoringSubtitle(): string {
+export function monitoringSubtitle(counts: FleetCounts = COUNTS): string {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const parts = [
-    `${COUNTS.services} services`,
-    `${COUNTS.containers} containers`,
-    `${COUNTS.databases} database`,
-    `${COUNTS.caches} cache`,
+    plural(counts.services, "service", "services"),
+    plural(counts.containers, "container", "containers"),
+    plural(counts.databases, "database", "databases"),
+    plural(counts.caches, "cache", "caches"),
   ];
   return `Monitoring ${parts.join(" · ")}`;
 }

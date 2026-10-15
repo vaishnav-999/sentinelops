@@ -6,6 +6,7 @@ import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { summarise } from "@/lib/incidents";
+import { SAMPLE_QUALIFIER } from "@/lib/api/mode";
 
 /**
  * The five figures at the top of /incidents, all derived from the store — no
@@ -34,7 +35,7 @@ export function IncidentsSummary() {
           label="MTTD"
           value={s.mttdSec}
           unit="s"
-          note={s.mttdSec === null ? "No runs yet" : `Simulated · ${s.mttdSamples} runs`}
+          note={s.mttdSec === null ? "No runs yet" : `${SAMPLE_QUALIFIER} · ${s.mttdSamples} runs`}
         />
         <Stat
           label="MTTR"
@@ -43,7 +44,7 @@ export function IncidentsSummary() {
           note={
             s.mttrSec === null
               ? "No runs yet"
-              : `Simulated · ${s.mttrSamples} incidents`
+              : `${SAMPLE_QUALIFIER} · ${s.mttrSamples} incidents`
           }
         />
       </div>

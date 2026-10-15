@@ -510,7 +510,9 @@ export type ChaosRunOutcome =
   | "running"
   | "auto_healed"
   | "escalated"
-  | "cancelled";
+  | "cancelled"
+  /** Live mode only: the fault was injected but never detected in time. */
+  | "failed";
 
 /**
  * Live state of the Chaos Lab run console. Owned by the engine, mirrored into
@@ -593,4 +595,42 @@ export interface SentinelSettings {
  */
 export interface GuardrailState {
   actionsByService: Record<string, number[]>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Live backend (FastAPI) status                                       */
+/* ------------------------------------------------------------------ */
+
+/** Isolation Forest training state, one model per monitored service. */
+export interface ModelStatus {
+  status: "active" | "training";
+  trainedServices: number;
+  totalServices: number;
+  /** Healthy samples collected by the least-trained service. */
+  samples: number;
+  warmupSamples: number;
+}
+
+/**
+ * Research metrics computed by the backend from recorded chaos runs. Every
+ * value is null until enough runs exist — never estimated.
+ */
+export interface ResearchMetrics {
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  falsePositiveRate: number | null;
+  /** Percent. */
+  mttdImprovement: number | null;
+  /** Percent. No manual baseline exists, so this stays null. */
+  mttrImprovement: number | null;
+  runs: number;
+  minRuns: number;
+  falsePositives: number;
+  healthyWindows: number;
+}
+
+export interface BackendStatus {
+  docker: boolean;
+  database: boolean;
 }

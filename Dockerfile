@@ -8,7 +8,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PUBLIC_DATA_SOURCE=mock
+# mock = in-browser simulation; http = FastAPI backend. An empty API base URL
+# means same origin (the reverse proxy routes /api and /ws to the backend).
+ARG NEXT_PUBLIC_DATA_SOURCE=mock
+ARG NEXT_PUBLIC_API_BASE_URL=
+ENV NEXT_PUBLIC_DATA_SOURCE=$NEXT_PUBLIC_DATA_SOURCE
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 RUN npm run build
 
 FROM node:22-bookworm-slim AS run

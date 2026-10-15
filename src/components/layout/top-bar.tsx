@@ -1,11 +1,13 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { Bell, Info, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
+import { Bell, Info, LogOut, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
 import { cn } from "cn";
 import { numeric } from "@/lib/utils";
 import { ENVIRONMENTS, OPERATOR, TIME_RANGES } from "@/lib/mock-data/constants";
-import { engine } from "@/lib/simulation/engine";
+import { controls } from "@/lib/api/controls";
+import { DATA_LABEL } from "@/lib/api/mode";
+import { logoutLive } from "@/lib/live/live-connection";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import type { EnvironmentId, Severity, TimeRange } from "@/lib/types";
 import { useMounted } from "@/lib/hooks/use-mounted";
@@ -16,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -72,6 +75,8 @@ function formatEventTime(t: number): string {
 function ThemeMenu() {
   const { theme, setTheme } = useTheme();
   const mounted = useMounted();
+  const authState = useSentinelStore((s) => s.authState);
+  const authUser = useSentinelStore((s) => s.authUser);
 
   return (
     <DropdownMenu>
@@ -87,7 +92,7 @@ function ThemeMenu() {
         {/* Plain header, not a GroupLabel: base-ui group parts throw outside a
             Menu.Group / Menu.RadioGroup, which takes the whole menu down. */}
         <div className="px-1.5 py-1">
-          <div className="text-sm text-text">{OPERATOR.name}</div>
+          <div className="text-sm text-text">{authUser ?? OPERATOR.name}</div>
           <div className="text-xs text-muted">{OPERATOR.role}</div>
         </div>
         <DropdownMenuSeparator />
@@ -111,6 +116,15 @@ function ThemeMenu() {
             System
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
+        {authState === "signed_in" ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="gap-2" onClick={() => void logoutLive()}>
+              <LogOut className="size-4 text-muted" strokeWidth={1.75} />
+              Sign out
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -172,7 +186,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
 
       <button
         type="button"
-        onClick={() => (live ? engine.pause() : engine.resume())}
+        onClick={() => (live ? controls.pause() : controls.resume())}
         className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-text-2 hover:bg-hover outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         aria-pressed={live}
       >
@@ -305,7 +319,7 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
 
         <span className="hidden items-center gap-1 text-xs text-muted min-[1280px]:inline-flex">
           <Info className="size-3.5 shrink-0" strokeWidth={1.75} />
-          Demo · simulated data
+          {DATA_LABEL}
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -313,14 +327,14 @@ export function TopBar({ onOpenMobile }: { onOpenMobile: () => void }) {
               <button
                 type="button"
                 className="inline-flex items-center rounded-sm text-muted min-[1280px]:hidden outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-                aria-label="Demo · simulated data"
+                aria-label={DATA_LABEL}
               />
             }
           >
             <Info className="size-3.5" strokeWidth={1.75} />
           </TooltipTrigger>
           <TooltipContent className="border border-border bg-panel text-text">
-            Demo · simulated data
+            {DATA_LABEL}
           </TooltipContent>
         </Tooltip>
       </div>

@@ -1,0 +1,63 @@
+# SentinelOps on a server (e.g. AWS EC2), layered on top of the live stack:
+#
+#   docker compose --env-file deploy/sentinel.env \
+#     -f docker-compose.live.yml -f docker-compose.prod.yml up -d --build
+#
+# Only Caddy is reachable from outside (80/443). The backend (8000) and the
+# demo gateway (8080) stay bound to 127.0.0.1 from the base file, so the
+# internet cannot reach them directly; browsers go through Caddy, which serves
+# the console and routes /api and /ws to the backend. Sign-in is required.
+# See deploy/EC2.md.
+
+services:
+  backend:
+    # Caddy replaces any client-sent X-Forwarded-For with the real peer address,
+    # so the login rate limit sees each browser's IP instead of Caddy's.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    environment:
+      SENTINEL_ADMIN_USER: ${SENTINEL_ADMIN_USER:-admin}
+      SENTINEL_ADMIN_PASSWORD: ${SENTINEL_ADMIN_PASSWORD:?set SENTINEL_ADMIN_PASSWORD in deploy/sentinel.env}
+      SENTINEL_SESSION_SECRET: ${SENTINEL_SESSION_SECRET:?set SENTINEL_SESSION_SECRET in deploy/sentinel.env}
+      SENTINEL_COOKIE_SECURE: "1"
+      CORS_ORIGINS: https://${SENTINEL_SITE:?set SENTINEL_SITE in deploy/sentinel.env}
+
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_DATA_SOURCE: http
+        NEXT_PUBLIC_API_BASE_URL: ""
+    environment:
+      # Server-side only (Next.js route handler); empty = deterministic reports.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      SENTINEL_BACKEND_URL: http://backend:8000
+    image: sentinelops/web:1.0.0
+    container_name: so-web
+    restart: unless-stopped
+    mem_limit: 512m
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: so-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SENTINEL_SITE: ${SENTINEL_SITE}
+      SENTINEL_TLS: ${SENTINEL_TLS:-auto}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - backend
+
+volumes:
+  caddy-data:
+  caddy-config:

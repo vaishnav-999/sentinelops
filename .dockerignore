@@ -5,3 +5,6 @@ node_modules
 docs/references
 sentinelops-portable
 *.log
+backend
+target
+deploy

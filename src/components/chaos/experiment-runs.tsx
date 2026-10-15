@@ -5,6 +5,7 @@ import { numeric } from "@/lib/utils";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import type { ExperimentOutcome, ExperimentRun } from "@/lib/types";
 import { formatClockTime } from "@/lib/metrics";
+import { IS_LIVE } from "@/lib/api/mode";
 import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,7 +25,7 @@ const OUTCOME_COPY: Record<
   auto_healed: { label: "Auto-healed", variant: "ok" },
   escalated: { label: "Escalated", variant: "crit" },
   cancelled: { label: "Cancelled", variant: "outline" },
-  failed: { label: "Failed", variant: "crit" },
+  failed: { label: IS_LIVE ? "Not detected" : "Failed", variant: "crit" },
 };
 
 /** Seconds between injection and a recorded timestamp, or "—". */
@@ -46,7 +47,7 @@ export function ExperimentRuns() {
     <Panel>
       <PanelHeader
         title="Experiment runs"
-        actions={<Badge variant="outline">Simulated runs</Badge>}
+        actions={<Badge variant="outline">{IS_LIVE ? "Recorded runs" : "Simulated runs"}</Badge>}
       />
       {rows.length === 0 ? (
         <div className="px-4 py-10 text-center text-sm text-muted">

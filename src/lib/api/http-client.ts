@@ -17,39 +17,27 @@ import type {
   ServiceMetricsResult,
 } from "./sentinel-client";
 
+import { apiFetch } from "./fetch";
+
 /**
- * HTTP client for the future FastAPI backend. Selected only when
- * NEXT_PUBLIC_DATA_SOURCE === "http". There is deliberately NO fake backend —
- * these methods call the real endpoints from SPEC §32. Until the backend
- * exists, `api` defaults to the mock client, so this code path is dormant.
- *
- * TODO(backend): finalise request/response shapes, auth headers, error model,
- * pagination and websocket/SSE streaming for logs + live telemetry once FastAPI
- * lands. Keep the return types identical to MockSentinelClient.
+ * HTTP client for the FastAPI backend (backend/app/main.py). Selected when
+ * NEXT_PUBLIC_DATA_SOURCE === "http". Live telemetry does not poll these
+ * endpoints — it streams over the /ws WebSocket (src/lib/live). These calls
+ * serve commands and one-off reads, with the same return types as
+ * MockSentinelClient.
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
-
-async function get<T>(path: string, params?: Record<string, string | undefined>): Promise<T> {
-  const url = new URL(`${BASE_URL}${path}`);
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined) url.searchParams.set(k, v);
-    }
+function get<T>(path: string, params?: Record<string, string | undefined>): Promise<T> {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v !== undefined) query.set(k, v);
   }
-  const res = await fetch(url.toString(), { headers: { accept: "application/json" } });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
-  return res.json() as Promise<T>;
+  const qs = query.toString();
+  return apiFetch<T>("GET", qs ? `${path}?${qs}` : path);
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
-  return res.json() as Promise<T>;
+function post<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>("POST", path, body);
 }
 
 export class HttpSentinelClient implements SentinelClient {
@@ -95,8 +83,13 @@ export class HttpSentinelClient implements SentinelClient {
     return post<RemediationExecution>("/api/remediation/execute", input);
   }
 
-  injectChaos(input: ChaosInjectInput): Promise<ChaosInjectResult> {
-    return post<ChaosInjectResult>("/api/chaos/inject", input);
+  async injectChaos(input: ChaosInjectInput): Promise<ChaosInjectResult> {
+    // Callers fire-and-forget; the backend explains a refusal with a toast.
+    try {
+      return await post<ChaosInjectResult>("/api/chaos/inject", input);
+    } catch {
+      return { accepted: false };
+    }
   }
 
   getMlStatus(): Promise<MlStatus> {

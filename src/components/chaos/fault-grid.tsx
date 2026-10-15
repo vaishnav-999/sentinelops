@@ -3,7 +3,8 @@
 import { cn } from "cn";
 import { numeric } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { engine } from "@/lib/simulation/engine";
+import { controls, RESET_LABEL } from "@/lib/api/controls";
+import { IS_LIVE } from "@/lib/api/mode";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { CHAOS_FAULTS, type FaultSeverity } from "@/lib/mock-data/faults";
 import { Panel } from "@/components/ui/panel";
@@ -17,10 +18,20 @@ const SEVERITY_TONE: Record<FaultSeverity, Tone> = {
   Critical: "crit",
 };
 
+/** What each fault really does to the live Docker stack. */
+const LIVE_DESCRIPTION: Record<string, string> = {
+  "memory-leak": "Worker allocates 3 MB/s until it is recycled.",
+  "unknown-anomaly": "Extra latency, 3% errors and CPU work — no known signature.",
+  "cpu-spike": "60 ms of CPU work per gateway request for 4 minutes.",
+  "service-crash": "payment-worker process exits; restart policy is off.",
+  "latency-injection": "+650 ms on every orders-service request.",
+  "cache-saturation": "Large keys without TTL fill Redis to maxmemory.",
+};
+
 /**
- * The six injectable faults. Every card routes through
- * `api.injectChaos` → `engine.runScenario`, the same entry point the global
- * hotkeys use, so there is exactly one way to start a run.
+ * The six injectable faults. Every card routes through `api.injectChaos` —
+ * the simulation engine in demo mode, the FastAPI backend in live mode — the
+ * same entry point the global hotkeys use, so there is one way to start a run.
  */
 export function FaultGrid() {
   const activeScenario = useSentinelStore((s) => s.activeScenario);
@@ -39,7 +50,9 @@ export function FaultGrid() {
               </Badge>
             </div>
 
-            <p className="mt-1 text-sm text-text-2">{fault.description}</p>
+            <p className="mt-1 text-sm text-text-2">
+              {IS_LIVE ? LIVE_DESCRIPTION[fault.scenarioId] : fault.description}
+            </p>
 
             <dl className="mt-4 grid grid-cols-2 gap-3">
               <div>
@@ -63,7 +76,7 @@ export function FaultGrid() {
 
             <div className="mt-4 flex items-center justify-between gap-2">
               <span className={cn("text-xs text-muted", numeric)}>
-                ~{fault.durationSec}s
+                {IS_LIVE ? "Real fault" : `~${fault.durationSec}s`}
               </span>
               <Button
                 size="sm"
@@ -80,11 +93,11 @@ export function FaultGrid() {
   );
 }
 
-/** Always enabled: cancels any run, clears timers and restores the seed state. */
+/** Always enabled: cancels any run and restores the healthy state. */
 export function ResetDemoButton() {
   return (
-    <Button variant="outline" size="sm" onClick={() => engine.reset()}>
-      Reset Demo
+    <Button variant="outline" size="sm" onClick={() => controls.reset()}>
+      {RESET_LABEL}
     </Button>
   );
 }

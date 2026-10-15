@@ -32,8 +32,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
-import { engine } from "@/lib/simulation/engine";
 import { api } from "@/lib/api";
+import { controls, RESET_LABEL } from "@/lib/api/controls";
 import { NAV_ITEMS, type NavIconId } from "@/lib/nav";
 
 /**
@@ -110,7 +110,7 @@ export function CommandPalette() {
           <CommandItem
             value="Pause monitoring"
             disabled={!live}
-            onSelect={() => run(() => engine.pause())}
+            onSelect={() => run(() => controls.pause())}
           >
             <Pause className="text-muted" strokeWidth={1.75} />
             Pause monitoring
@@ -118,7 +118,7 @@ export function CommandPalette() {
           <CommandItem
             value="Resume monitoring"
             disabled={live}
-            onSelect={() => run(() => engine.resume())}
+            onSelect={() => run(() => controls.resume())}
           >
             <Play className="text-muted" strokeWidth={1.75} />
             Resume monitoring
@@ -127,7 +127,7 @@ export function CommandPalette() {
 
         <CommandSeparator />
 
-        <CommandGroup heading="Demo">
+        <CommandGroup heading="Chaos">
           <CommandItem
             value="Inject memory leak"
             onSelect={() =>
@@ -153,11 +153,11 @@ export function CommandPalette() {
             Inject unknown anomaly
           </CommandItem>
           <CommandItem
-            value="Reset demo"
-            onSelect={() => run(() => engine.reset())}
+            value={RESET_LABEL}
+            onSelect={() => run(() => controls.reset())}
           >
             <RotateCcw className="text-muted" strokeWidth={1.75} />
-            Reset demo
+            {RESET_LABEL}
           </CommandItem>
         </CommandGroup>
 

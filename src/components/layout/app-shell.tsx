@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { GlobalHotkeys } from "@/components/layout/hotkeys";
+import { LiveGate } from "@/components/layout/live-gate";
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopBar } from "@/components/layout/top-bar";
 
@@ -66,7 +67,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="flex min-w-0 flex-1 flex-col">
             <TopBar onOpenMobile={() => setMobileOpen(true)} />
             <main className="min-h-0 flex-1 overflow-auto">
-              <div className="px-4 pb-4 pt-3">{children}</div>
+              <div className="px-4 pb-4 pt-3">
+                <LiveGate>{children}</LiveGate>
+              </div>
             </main>
           </div>
         </div>

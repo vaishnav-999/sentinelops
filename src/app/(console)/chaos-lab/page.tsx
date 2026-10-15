@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { FaultGrid, ResetDemoButton } from "@/components/chaos/fault-grid";
 import { RunConsole } from "@/components/chaos/run-console";
 import { ExperimentRuns } from "@/components/chaos/experiment-runs";
+import { IS_LIVE } from "@/lib/api/mode";
 
 export const metadata: Metadata = {
   title: "Chaos Lab — SentinelOps",
@@ -19,7 +20,11 @@ export default function ChaosLabPage() {
     <>
       <PageHeader
         title="Chaos Lab"
-        description="Safely inject controlled failures into the demo environment."
+        description={
+          IS_LIVE
+            ? "Inject real, reversible failures into the local demo containers."
+            : "Safely inject controlled failures into the demo environment."
+        }
       />
 
       <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-warn/40 bg-warn-badge px-4 py-2.5">
@@ -29,10 +34,12 @@ export default function ChaosLabPage() {
             strokeWidth={1.75}
           />
           <span className="text-sm font-medium text-warn-text">
-            DEMO ENVIRONMENT ONLY
+            {IS_LIVE ? "LOCAL DOCKER STACK ONLY" : "DEMO ENVIRONMENT ONLY"}
           </span>
           <span className="hidden text-sm text-text-2 sm:inline">
-            Faults are simulated. No real infrastructure is touched.
+            {IS_LIVE
+              ? "Faults are real and hit the demo containers in docker-compose.live.yml."
+              : "Faults are simulated. No real infrastructure is touched."}
           </span>
         </div>
         <ResetDemoButton />

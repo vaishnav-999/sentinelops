@@ -7,7 +7,8 @@ import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { useReducedMotion } from "@/lib/hooks/use-reduced-motion";
-import { COUNTS } from "@/lib/mock-data";
+import { useFleetCounts } from "@/lib/store/use-fleet-counts";
+import { DATA_LABEL, IS_LIVE } from "@/lib/api/mode";
 import { formatCompactNumber } from "@/lib/metrics";
 import {
   SERVICE_STATUS_LABEL,
@@ -37,7 +38,7 @@ export function InfrastructureView() {
           <PanelHeader
             title="System topology"
             actions={
-              <span className="text-xs text-muted">Demo · simulated</span>
+              <span className="text-xs text-muted">{DATA_LABEL}</span>
             }
           />
           <div className="hidden p-4 md:block">
@@ -57,6 +58,7 @@ export function InfrastructureView() {
 function CountsRow() {
   const containers = useSentinelStore((s) => s.containers);
   const services = useSentinelStore((s) => s.services);
+  const counts = useFleetCounts();
 
   const running = containers.filter((c) => c.status === "running").length;
   const unhealthy = services.filter((s) => s.status !== "healthy").length;
@@ -64,14 +66,14 @@ function CountsRow() {
   return (
     <Panel>
       <div className="grid grid-cols-2 divide-border sm:grid-cols-4 sm:divide-x">
-        <Count label="Services" value={COUNTS.services} note={`${services.length - unhealthy} healthy`} />
+        <Count label="Services" value={counts.services} note={`${services.length - unhealthy} healthy`} />
         <Count
           label="Containers"
-          value={COUNTS.containers}
+          value={counts.containers}
           note={`${running} running`}
         />
-        <Count label="Databases" value={COUNTS.databases} note="PostgreSQL 16.2" />
-        <Count label="Caches" value={COUNTS.caches} note="Redis 7.2" />
+        <Count label="Databases" value={counts.databases} note={IS_LIVE ? "PostgreSQL 16" : "PostgreSQL 16.2"} />
+        <Count label="Caches" value={counts.caches} note="Redis 7.2" />
       </div>
     </Panel>
   );

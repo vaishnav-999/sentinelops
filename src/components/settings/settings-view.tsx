@@ -8,7 +8,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { TONE_BADGE } from "@/lib/tone";
-import type { SentinelSettings } from "@/lib/types";
+import type { BackendStatus, SentinelSettings } from "@/lib/types";
+import { IS_LIVE } from "@/lib/api/mode";
+import { modelStatusLabel } from "@/lib/live/model-status";
 
 /**
  * /settings — the operator's control surface (SPEC §26).
@@ -23,20 +25,32 @@ import type { SentinelSettings } from "@/lib/types";
 interface Integration {
   name: string;
   detail: string;
-  status: "Not connected" | "Not configured";
+  status: "Connected" | "Not connected" | "Not configured";
 }
 
-const INTEGRATIONS: Integration[] = [
-  { name: "Docker", detail: "Container runtime · docker.sock", status: "Not connected" },
-  { name: "PostgreSQL", detail: "Incident and metric persistence", status: "Not connected" },
-  { name: "Slack", detail: "Incident notifications", status: "Not connected" },
-  { name: "PagerDuty", detail: "On-call escalation", status: "Not connected" },
-  { name: "Gemini", detail: "Incident report generation", status: "Not configured" },
-];
+function integrations(backend: BackendStatus | null): Integration[] {
+  return [
+    {
+      name: "Docker",
+      detail: "Container runtime · docker.sock",
+      status: backend?.docker ? "Connected" : "Not connected",
+    },
+    {
+      name: "PostgreSQL",
+      detail: "Incident and metric persistence",
+      status: backend?.database ? "Connected" : "Not connected",
+    },
+    { name: "Slack", detail: "Incident notifications", status: "Not connected" },
+    { name: "PagerDuty", detail: "On-call escalation", status: "Not connected" },
+    { name: "Gemini", detail: "Incident report generation", status: "Not configured" },
+  ];
+}
 
 export function SettingsView() {
   const settings = useSentinelStore((s) => s.settings);
   const update = useSentinelStore((s) => s.updateSettings);
+  const backend = useSentinelStore((s) => s.backend);
+  const model = useSentinelStore((s) => s.model);
 
   const set = (patch: Partial<SentinelSettings>) => update(patch);
 
@@ -160,7 +174,7 @@ export function SettingsView() {
             actions={<span className="text-xs text-muted">Read-only in this build</span>}
           />
           <ReadOnlyRow label="Detector" value="Isolation Forest" />
-          <ReadOnlyRow label="Model status" value="Simulated — training pending" />
+          <ReadOnlyRow label="Model status" value={modelStatusLabel(model)} />
           <ReadOnlyRow
             label="Baseline window"
             value={`${settings.baselineWindowHours}h`}
@@ -177,12 +191,14 @@ export function SettingsView() {
           title="Integrations"
           actions={
             <span className="text-xs text-muted">
-              Simulated backend — nothing is connected yet
+              {IS_LIVE
+                ? "FastAPI backend · local Docker stack"
+                : "Simulated backend — nothing is connected yet"}
             </span>
           }
         />
         <ul className="flex flex-col divide-y divide-border">
-          {INTEGRATIONS.map((integration) => (
+          {integrations(backend).map((integration) => (
             <li
               key={integration.name}
               className="flex items-center justify-between gap-4 px-4 py-3"
@@ -193,7 +209,10 @@ export function SettingsView() {
                   {integration.detail}
                 </div>
               </div>
-              <Badge variant={TONE_BADGE.muted} className="shrink-0 font-normal">
+              <Badge
+                variant={integration.status === "Connected" ? TONE_BADGE.ok : TONE_BADGE.muted}
+                className="shrink-0 font-normal"
+              >
                 {integration.status}
               </Badge>
             </li>

@@ -1,0 +1,193 @@
+# SentinelOps live stack (laptop only).
+#
+#   docker compose -f docker-compose.live.yml up -d --build
+#
+# backend        FastAPI control plane on http://127.0.0.1:8000 (loopback only:
+#                it holds the Docker socket, so it must never be exposed).
+# sentinel-db    Platform Postgres: incidents, executions, experiments, settings.
+# target system  api-gateway, auth-service, orders-service, payment-worker,
+#                notification-worker, redis-cache, postgres, loadgen.
+#
+# Target services use restart: "no" on purpose: a crash stays down until
+# SentinelOps (or you) brings it back.
+
+name: sentinelops-live
+
+x-target-app: &target-app
+  build: ./target
+  image: sentinelops/target-app:1.0.0
+  restart: "no"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis-cache:
+      condition: service_started
+
+services:
+  api-gateway:
+    <<: *target-app
+    container_name: so-api-gateway
+    environment:
+      SERVICE: api-gateway
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    mem_limit: 256m
+    cpus: 1.0
+    labels:
+      sentinelops.role: target
+      sentinelops.service: api-gateway
+    depends_on:
+      auth-service:
+        condition: service_started
+      orders-service:
+        condition: service_started
+      redis-cache:
+        condition: service_started
+
+  auth-service:
+    <<: *target-app
+    container_name: so-auth-service
+    environment:
+      SERVICE: auth-service
+      PORT: "8081"
+      PG_DSN: postgresql://shop:shop@postgres:5432/shop
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: auth-service
+
+  orders-service:
+    <<: *target-app
+    container_name: so-orders-service
+    environment:
+      SERVICE: orders-service
+      PORT: "8082"
+      PG_DSN: postgresql://shop:shop@postgres:5432/shop
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: orders-service
+
+  payment-worker:
+    <<: *target-app
+    container_name: so-payment-worker
+    environment:
+      SERVICE: payment-worker
+      PORT: "9110"
+      PG_DSN: postgresql://shop:shop@postgres:5432/shop
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: payment-worker
+
+  notification-worker:
+    <<: *target-app
+    container_name: so-notification-worker
+    environment:
+      SERVICE: notification-worker
+      PORT: "9120"
+      PG_DSN: postgresql://shop:shop@postgres:5432/shop
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: notification-worker
+
+  redis-cache:
+    image: redis:7.2-alpine
+    container_name: so-redis-cache
+    restart: "no"
+    command:
+      - redis-server
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - volatile-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    mem_limit: 128m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: redis-cache
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: so-postgres
+    restart: "no"
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
+    volumes:
+      - ./target/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+    cpus: 1.0
+    labels:
+      sentinelops.role: target
+      sentinelops.service: postgres
+
+  loadgen:
+    <<: *target-app
+    container_name: so-loadgen
+    command: ["python", "loadgen.py"]
+    environment:
+      SERVICE: loadgen
+      PORT: "0"
+      RATE: "15"
+    mem_limit: 128m
+    cpus: 0.5
+    labels:
+      sentinelops.role: target
+      sentinelops.service: loadgen
+    depends_on:
+      api-gateway:
+        condition: service_started
+
+  sentinel-db:
+    image: postgres:16-alpine
+    container_name: so-sentinel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+      POSTGRES_DB: sentinel
+    volumes:
+      - sentinel-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    build: ./backend
+    image: sentinelops/backend:1.0.0
+    container_name: so-backend
+    restart: unless-stopped
+    environment:
+      SENTINEL_DB_DSN: postgresql://sentinel:sentinel@sentinel-db:5432/sentinel
+      TARGET_PG_DSN: postgresql://shop:shop@postgres:5432/shop
+      REDIS_HOST: redis-cache
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      sentinel-db:
+        condition: service_healthy
+
+volumes:
+  sentinel-data:

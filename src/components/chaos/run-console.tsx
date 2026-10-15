@@ -17,6 +17,7 @@ import type { ChaosRunState, RunStepId } from "@/lib/types";
 import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
 import { METRIC_META, formatAxisValue, formatMetricValue } from "@/lib/metrics";
+import { IS_LIVE } from "@/lib/api/mode";
 import type { MetricKey } from "@/lib/simulation/thresholds";
 
 const STEP_LABEL: Record<RunStepId, string> = {
@@ -88,7 +89,7 @@ export function RunConsole() {
         actions={
           <>
             <span className={cn("text-xs text-muted", numeric)}>{run.runId}</span>
-            <Badge variant="outline">Demo time compressed</Badge>
+            <Badge variant="outline">{IS_LIVE ? "Real time" : "Demo time compressed"}</Badge>
           </>
         }
       />
@@ -300,7 +301,7 @@ function RunResult({ run }: { run: ChaosRunState }) {
   const tone =
     run.outcome === "auto_healed"
       ? "text-ok-text"
-      : run.outcome === "escalated"
+      : run.outcome === "escalated" || run.outcome === "failed"
         ? "text-crit-text"
         : "text-muted";
   const label =
@@ -308,7 +309,9 @@ function RunResult({ run }: { run: ChaosRunState }) {
       ? "AUTO-HEALED"
       : run.outcome === "escalated"
         ? "ESCALATED"
-        : "CANCELLED";
+        : run.outcome === "failed"
+          ? "NOT DETECTED"
+          : "CANCELLED";
 
   return (
     <div className="flex flex-wrap items-end justify-between gap-4 border-t border-border px-4 py-3">

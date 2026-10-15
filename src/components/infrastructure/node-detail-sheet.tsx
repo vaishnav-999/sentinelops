@@ -14,6 +14,7 @@ import { Sparkline } from "@/components/charts/sparkline";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { formatCompactNumber } from "@/lib/metrics";
 import { SERVICE_STATUS_LABEL, SERVICE_STATUS_TONE, TONE_BADGE } from "@/lib/tone";
+import { DATA_LABEL } from "@/lib/api/mode";
 
 /**
  * Node detail drawer for /infrastructure. Everything is read from the store by
@@ -137,7 +138,7 @@ export function NodeDetailSheet({
                 </p>
               )}
               <p className="text-xs text-muted">
-                Demo · simulated telemetry
+                {DATA_LABEL}
               </p>
             </div>
           </>

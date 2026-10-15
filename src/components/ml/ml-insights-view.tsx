@@ -7,6 +7,9 @@ import { Panel, PanelHeader } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
 import { useSentinelStore } from "@/lib/store/sentinel-store";
 import { BASELINE_LABEL, BASELINE_TONE, TONE_BADGE, TONE_TEXT } from "@/lib/tone";
+import type { ResearchMetrics } from "@/lib/types";
+import { DATA_LABEL, IS_LIVE } from "@/lib/api/mode";
+import { modelStatusLabel } from "@/lib/live/model-status";
 import { PipelineRow } from "./pipeline-row";
 import { AnomalyScoreChart, BaselineChart } from "./baseline-chart";
 
@@ -30,14 +33,25 @@ const FEATURES = [
   "throughput",
 ] as const;
 
-const RESEARCH_METRICS = [
-  "Precision",
-  "Recall",
-  "F1 score",
-  "False positive rate",
-  "MTTD improvement",
-  "MTTR improvement",
-] as const;
+const RESEARCH_METRICS: { label: string; key: keyof ResearchMetrics }[] = [
+  { label: "Precision", key: "precision" },
+  { label: "Recall", key: "recall" },
+  { label: "F1 score", key: "f1" },
+  { label: "False positive rate", key: "falsePositiveRate" },
+  { label: "MTTD improvement", key: "mttdImprovement" },
+  { label: "MTTR improvement", key: "mttrImprovement" },
+];
+
+/** Score at which the detector fires: the live backend fires at 0.60. */
+const DECISION_SCORE = IS_LIVE ? 0.6 : 0.7;
+
+function formatResearch(key: keyof ResearchMetrics, value: number): string {
+  if (key === "mttdImprovement" || key === "mttrImprovement") {
+    return `${value.toFixed(1)}%`;
+  }
+  if (key === "f1") return value.toFixed(3);
+  return `${(value * 100).toFixed(1)}%`;
+}
 
 export function MlInsightsView() {
   return (
@@ -68,13 +82,15 @@ function ModelCards() {
   const anomaly = useSentinelStore((s) => s.anomaly);
   const diagnosis = useSentinelStore((s) => s.diagnosis);
   const settings = useSentinelStore((s) => s.settings);
+  const model = useSentinelStore((s) => s.model);
   const tone = BASELINE_TONE[anomaly.baseline];
+  const active = model?.status === "active";
 
   return (
     <Panel>
       <PanelHeader
         title="Anomaly detection"
-        actions={<span className="text-xs text-muted">Demo · simulated telemetry</span>}
+        actions={<span className="text-xs text-muted">{DATA_LABEL}</span>}
       />
       <div className="grid grid-cols-2 divide-border lg:grid-cols-4 lg:divide-x">
         <Cell label="Model">
@@ -82,10 +98,17 @@ function ModelCards() {
           <Note>Unsupervised · anomaly score only</Note>
         </Cell>
         <Cell label="Model status">
-          <Badge variant={TONE_BADGE.warn} className="font-normal">
-            Simulated — training pending
+          <Badge
+            variant={active ? TONE_BADGE.ok : TONE_BADGE.warn}
+            className="font-normal"
+          >
+            {modelStatusLabel(model)}
           </Badge>
-          <Note>No trained model is shipped with this build</Note>
+          <Note>
+            {IS_LIVE
+              ? "One model per service, fitted on live healthy samples"
+              : "No trained model is shipped with this build"}
+          </Note>
         </Cell>
         <Cell label="Baseline window">
           <span className={cn("text-base text-text", numeric)}>
@@ -97,7 +120,9 @@ function ModelCards() {
           <span className={cn("text-xl", numeric, TONE_TEXT[tone])}>
             {anomaly.score.toFixed(2)}
           </span>
-          <Note>{BASELINE_LABEL[anomaly.baseline]} · decision at 0.70</Note>
+          <Note>
+            {BASELINE_LABEL[anomaly.baseline]} · decision at {DECISION_SCORE.toFixed(2)}
+          </Note>
         </Cell>
       </div>
 
@@ -147,22 +172,27 @@ function ModelCards() {
 }
 
 /**
- * Live feature attribution. Labelled "Simulated attribution": these weights
- * come from the scenario definition, not from a fitted model, and saying so is
- * the difference between a demo and a false claim.
+ * Feature attribution. In demo mode the weights come from the scenario
+ * definition, so they are labelled "Simulated attribution". In live mode they
+ * are each feature's share of the z-score deviation from the learned baseline —
+ * not Isolation Forest internals, hence "Deviation attribution".
  */
 function ContributionPanel() {
   const contributions = useSentinelStore((s) => s.anomaly.contributions);
   const score = useSentinelStore((s) => s.anomaly.score);
 
   const rows = contributions ?? [];
-  const abnormal = score >= 0.7;
+  const abnormal = score >= DECISION_SCORE;
 
   return (
     <Panel className="h-full">
       <PanelHeader
         title="Feature contribution"
-        actions={<span className="text-xs text-muted">Simulated attribution</span>}
+        actions={
+          <span className="text-xs text-muted">
+            {IS_LIVE ? "Deviation attribution" : "Simulated attribution"}
+          </span>
+        }
       />
       {rows.length === 0 ? (
         <div className="flex flex-1 items-center px-4 py-8">
@@ -199,27 +229,51 @@ function ContributionPanel() {
 }
 
 function ResearchEvaluation() {
+  const research = useSentinelStore((s) => s.research);
+  const evaluated = research !== null && research.runs >= research.minRuns;
+
   return (
     <Panel className="h-full">
       <PanelHeader
         title="Research evaluation"
         actions={
-          <Badge variant={TONE_BADGE.muted} className="font-normal">
-            Awaiting evaluation
+          <Badge
+            variant={evaluated ? TONE_BADGE.ai : TONE_BADGE.muted}
+            className={cn("font-normal", numeric)}
+          >
+            {evaluated
+              ? `${research.runs} recorded runs`
+              : research
+                ? `Awaiting evaluation · ${research.runs}/${research.minRuns} runs`
+                : "Awaiting evaluation"}
           </Badge>
         }
       />
       <div className="grid grid-cols-2 gap-x-4 gap-y-4 px-4 py-4 sm:grid-cols-3">
-        {RESEARCH_METRICS.map((metric) => (
-          <div key={metric} className="min-w-0">
-            <div className="label">{metric}</div>
-            <div className={cn("mt-1 text-xl text-muted", numeric)}>—</div>
-            <div className="mt-0.5 text-xs text-muted">Awaiting evaluation</div>
-          </div>
-        ))}
+        {RESEARCH_METRICS.map(({ label, key }) => {
+          const value = research?.[key];
+          const known = typeof value === "number";
+          return (
+            <div key={key} className="min-w-0">
+              <div className="label">{label}</div>
+              <div
+                className={cn("mt-1 text-xl", numeric, known ? "text-text" : "text-muted")}
+              >
+                {known ? formatResearch(key, value) : "—"}
+              </div>
+              <div className="mt-0.5 text-xs text-muted">
+                {known ? "Measured from recorded runs" : "Awaiting evaluation"}
+              </div>
+            </div>
+          );
+        })}
       </div>
       <p className="border-t border-border px-4 py-3 text-sm text-text-2">
-        Experimental results will populate after model evaluation.
+        {IS_LIVE
+          ? research && evaluated
+            ? `${research.falsePositives} false positives across ${research.healthyWindows} healthy service-minutes. MTTR improvement needs a manual baseline and stays unmeasured.`
+            : "Metrics compute once enough Chaos Lab runs have been recorded."
+          : "Experimental results will populate after model evaluation."}
       </p>
     </Panel>
   );
@@ -236,8 +290,10 @@ function MethodologyNote() {
         </p>
         <p className="text-sm text-muted">
           Each run records the injection time, the anomaly detector&rsquo;s fire
-          time and the static rule&rsquo;s fire time, which is what a detection
-          comparison will be computed from once the model is trained.
+          time and the static rule&rsquo;s fire time.{" "}
+          {IS_LIVE
+            ? "Precision, recall and F1 are computed from those runs; false positives are detector firings outside any run window."
+            : "That is what a detection comparison will be computed from once the model is trained."}
         </p>
         <Link
           href="/chaos-lab"
