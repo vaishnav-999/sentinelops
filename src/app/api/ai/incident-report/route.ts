@@ -4,10 +4,13 @@ import {
   REPORT_JSON_SCHEMA,
   REPORT_SYSTEM_PROMPT,
   fallbackReport,
+  groundReport,
   isReportable,
   parseReport,
   toReportInput,
+  type IncidentReport,
   type IncidentReportResponse,
+  type ReportInput,
 } from "@/lib/ai/incident-report";
 
 /**
@@ -15,7 +18,8 @@ import {
  *
  * Server only: GEMINI_API_KEY never reaches the browser. Any Gemini failure
  * (no key, timeout, quota, malformed output) falls back to the deterministic
- * report, so the endpoint always answers with a usable report.
+ * report, so the endpoint always answers with a usable report. Every report,
+ * either source, carries a numeric grounding check against the incident.
  */
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
@@ -73,6 +77,15 @@ function remember(key: string, value: IncidentReportResponse): void {
   cache.set(key, value);
 }
 
+function fallback(input: ReportInput, reason: string): IncidentReportResponse {
+  const report = fallbackReport(input);
+  return { report, source: "fallback", reason, grounding: groundReport(report, input) };
+}
+
+function fromGemini(input: ReportInput, report: IncidentReport, model: string): IncidentReportResponse {
+  return { report, source: "gemini", model, grounding: groundReport(report, input) };
+}
+
 export async function POST(request: Request) {
   if (!sameOrigin(request)) {
     return Response.json({ detail: "Origin not allowed" }, { status: 403 });
@@ -102,24 +115,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const cacheKey = `${input.id}:${input.detectedAt}:${input.status}`;
+  const cacheKey = `${input.id}:${input.detectedAt}:${input.status}:${input.relapsedBy ?? ""}`;
   const cached = cache.get(cacheKey);
   if (cached) return Response.json(cached);
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return Response.json({
-      report: fallbackReport(input),
-      source: "fallback",
-      reason: "Gemini is not configured",
-    } satisfies IncidentReportResponse);
+    return Response.json(fallback(input, "Gemini is not configured"));
   }
   if (rateLimited(clientKey(request), Date.now())) {
-    return Response.json({
-      report: fallbackReport(input),
-      source: "fallback",
-      reason: "Report rate limit reached",
-    } satisfies IncidentReportResponse);
+    return Response.json(fallback(input, "Report rate limit reached"));
   }
 
   const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
@@ -140,17 +145,11 @@ export async function POST(request: Request) {
       },
     });
     const report = parseReport(res.text);
-    result = report
-      ? { report, source: "gemini", model }
-      : { report: fallbackReport(input), source: "fallback", reason: "Gemini returned an unusable report" };
+    result = report ? fromGemini(input, report, model) : fallback(input, "Gemini returned an unusable report");
   } catch (err) {
     const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
     console.warn("[ai/incident-report] Gemini call failed:", err instanceof Error ? err.message : err);
-    result = {
-      report: fallbackReport(input),
-      source: "fallback",
-      reason: timedOut ? "Gemini timed out" : "Gemini request failed",
-    };
+    result = fallback(input, timedOut ? "Gemini timed out" : "Gemini request failed");
   }
   if (result.source === "gemini") remember(cacheKey, result);
   return Response.json(result);

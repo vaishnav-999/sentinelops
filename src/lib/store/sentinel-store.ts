@@ -20,6 +20,7 @@ import type {
   IslandState,
   LogEntry,
   MetricSample,
+  PolicyTrustState,
   RemediationExecution,
   RemediationPolicy,
   ScenarioId,
@@ -155,6 +156,8 @@ export interface SentinelState {
   /* Safety */
   settings: SentinelSettings;
   guardrails: GuardrailState;
+  /** Live mode only: earned trust per policy/service. Null in the demo. */
+  policyTrust: PolicyTrustState | null;
 
   /* Research */
   experimentRuns: ExperimentRun[];
@@ -258,6 +261,7 @@ export function createInitialState(): SentinelState {
       blockRestrictedActions: true,
     },
     guardrails: { actionsByService: {} },
+    policyTrust: null,
 
     experimentRuns: [],
 

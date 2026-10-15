@@ -131,8 +131,14 @@ def me(request: Request):
 
 class ChaosInjectInput(BaseModel):
     scenario: Literal[
-        "memory-leak", "unknown-anomaly", "cpu-spike", "service-crash", "latency-injection", "cache-saturation"
+        "memory-leak", "unknown-anomaly", "cpu-spike", "service-crash", "latency-injection", "cache-saturation",
+        "recurring-leak",
     ]
+
+
+class TrustResetInput(BaseModel):
+    policyId: str | None = None
+    serviceId: str | None = None
 
 
 class RemediationExecuteInput(BaseModel):
@@ -263,6 +269,7 @@ def research_export():
         "incidents": core.incidents,
         "detections": core.detections,
         "evalCounters": core.eval_counters,
+        "policyTrust": core.trust.doc(),
         "config": {
             "mlFireScore": config.ML_FIRE_SCORE,
             "mlMinEffectSigma": config.ML_MIN_EFFECT_Z,
@@ -270,8 +277,16 @@ def research_export():
             "thresholdConsecutiveToFire": config.CONSECUTIVE_TO_FIRE,
             "warmupSamples": config.WARMUP_SAMPLES,
             "decisionThreshold": core.settings.get("decisionThreshold"),
+            "trustPrior": [config.TRUST_PRIOR_SUCCESS, config.TRUST_PRIOR_FAILURE],
+            "trustFloor": config.TRUST_FLOOR,
+            "relapseWindowSec": config.RELAPSE_WINDOW_SEC,
         },
     }
+
+
+@app.get("/api/policies/trust")
+def policy_trust():
+    return core.trust.doc()
 
 
 # -------------------------------------------------------------------- writes
@@ -294,6 +309,14 @@ async def remediation_execute(body: RemediationExecuteInput):
 @app.post("/api/settings")
 async def patch_settings(body: dict):
     return await core.update_settings(body)
+
+
+@app.post("/api/policies/trust/reset")
+async def policy_trust_reset(body: TrustResetInput | None = None):
+    body = body or TrustResetInput()
+    if body.policyId is not None and body.serviceId is None:
+        raise HTTPException(status_code=400, detail="serviceId is required with policyId")
+    return await core.reset_trust(body.policyId, body.serviceId)
 
 
 @app.post("/api/system/reset")

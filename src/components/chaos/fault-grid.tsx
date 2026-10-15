@@ -26,10 +26,15 @@ const LIVE_DESCRIPTION: Record<string, string> = {
   "service-crash": "payment-worker process exits; restart policy is off.",
   "latency-injection": "+650 ms on every orders-service request.",
   "cache-saturation": "Large keys without TTL fill Redis to maxmemory.",
+  "recurring-leak":
+    "Worker leaks 3 MB/s and the leak returns after each restart. The first fix " +
+    "auto-heals; the relapse costs the policy its earned trust and goes to an operator.",
 };
 
+const FAULTS = CHAOS_FAULTS.filter((f) => IS_LIVE || !f.liveOnly);
+
 /**
- * The six injectable faults. Every card routes through `api.injectChaos` —
+ * The injectable faults (six, plus the live-only recurring leak). Every card routes through `api.injectChaos` —
  * the simulation engine in demo mode, the FastAPI backend in live mode — the
  * same entry point the global hotkeys use, so there is one way to start a run.
  */
@@ -39,7 +44,7 @@ export function FaultGrid() {
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {CHAOS_FAULTS.map((fault) => {
+      {FAULTS.map((fault) => {
         const isActive = activeScenario === fault.scenarioId;
         return (
           <Panel key={fault.scenarioId} className="p-4">

@@ -3,6 +3,7 @@
 import { AutonomyStrip } from "@/components/remediation/autonomy-strip";
 import { PoliciesTable } from "@/components/remediation/policies-table";
 import { ExecutionsPanel } from "@/components/remediation/executions-panel";
+import { TrustPanel } from "@/components/remediation/trust-panel";
 
 /** /auto-heal: status, the policies, and what they actually did (SPEC §12). */
 export function AutoHealView() {
@@ -10,6 +11,7 @@ export function AutoHealView() {
     <div className="flex flex-col gap-3">
       <AutonomyStrip />
       <PoliciesTable />
+      <TrustPanel />
       <ExecutionsPanel />
     </div>
   );

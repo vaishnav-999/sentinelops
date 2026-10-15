@@ -43,6 +43,7 @@ const SET_KEYS = [
   "chaosRun",
   "settings",
   "guardrails",
+  "policyTrust",
   "experimentRuns",
   "research",
   "model",
@@ -289,6 +290,15 @@ export async function logoutLive(): Promise<void> {
     await apiFetch("POST", "/api/auth/logout");
   } finally {
     signedOut();
+  }
+}
+
+/** Clear earned-trust evidence for one policy/service pair, or for all. */
+export async function resetTrustLive(policyId?: string, serviceId?: string): Promise<void> {
+  try {
+    await request("POST", "/api/policies/trust/reset", policyId ? { policyId, serviceId } : {});
+  } catch {
+    notifier?.("error", "Trust not reset", "The backend could not be reached.");
   }
 }
 

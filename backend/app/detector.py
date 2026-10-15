@@ -434,6 +434,13 @@ class ServiceDetector:
             features=features,
         )
 
+    def container_restarted(self) -> None:
+        """A verdict about the previous process is stale: a fault still present
+        in the new one must fire again as a fresh edge."""
+        self.ml_consec = 0
+        self.ml_clear_consec = 0
+        self.ml_fired = False
+
     def reset_state(self) -> None:
         self.ml_consec = 0
         self.ml_clear_consec = 0

@@ -42,6 +42,7 @@ from .docker_io import DockerWatcher
 from .hub import Hub
 from .persistence import Store
 from .probes import Prober
+from .trust import TrustLedger
 
 log = logging.getLogger("sentinel.core")
 
@@ -93,6 +94,7 @@ class Core:
         self.verdicts: dict[str, Verdict] = {}
         self.fired_at: dict[str, dict[str, int | None]] = {sid: {"ml": None, "threshold": None} for sid in SERVICE_IDS}
         self.uptime: dict[str, list[int]] = {sid: [0, 0] for sid in SERVICE_IDS}
+        self.started_at: dict[str, int] = {}
         self.hit_baseline: float | None = None
 
         self.settings = dict(DEFAULT_SETTINGS)
@@ -134,6 +136,7 @@ class Core:
         # Detections held by the host-wide guard or attributed to a dependency;
         # re-evaluated every tick while the detector stays fired.
         self.deferred: dict[str, str] = {}
+        self.trust = TrustLedger()
         self._calm_at = 0
         self._calm_index = 0
         self._loop_task: asyncio.Task | None = None
@@ -178,6 +181,7 @@ class Core:
         ev = self.db.get("eval")
         if isinstance(ev, dict):
             self.eval_counters.update({k: int(v) for k, v in ev.items() if k in self.eval_counters})
+        self.trust.restore(self.db.get("trust"))
         self.incidents = self.db.load("incident", 200)
         self.executions = self.db.load("execution", 50)
         self.experiments = self.db.load("experiment", 100)
@@ -270,6 +274,10 @@ class Core:
             self.windows[sid].append(metrics)
 
             started = primary.get("startedAt") if primary else None
+            if started and self.started_at.get(sid) not in (None, started):
+                self.detectors[sid].container_restarted()
+            if started:
+                self.started_at[sid] = started
             in_grace = bool(running and started and (t - started) < config.STARTUP_GRACE_SEC * 1000)
             in_grace = in_grace or t < self.stall_until or (running and not self.stats_ok.get(sid, False))
             eligible = (
@@ -318,6 +326,8 @@ class Core:
                 self._maybe_open(sid, kind, t, v)
 
         self._count_windows()
+        if self.trust.expire(t):
+            self._save_trust()
 
         # Island returns to operational 8 s after "recovered".
         if self.recovered_since is not None and t - self.recovered_since >= 8000 and not self.pipelines:
@@ -668,12 +678,29 @@ class Core:
                     "info",
                     sid,
                 )
+                self._record_impact(cause, sid, kind, t)
             self.deferred[sid] = kind
             return
         self.deferred.pop(sid, None)
         task = asyncio.create_task(self._pipeline(sid, kind, verdict))
         self.pipelines[sid] = task
         self.pipeline_order.append(sid)
+
+    def _record_impact(self, cause: str, sid: str, kind: str, t: int) -> None:
+        """Blast radius: a symptom on a caller is charged to the root incident,
+        and the incident (plus action) it would otherwise have opened is counted
+        as suppressed."""
+        window = config.ESCALATION_MEMORY_SEC * 1000
+        inc = next((i for i in reversed(self.incidents)
+                    if i["serviceId"] == cause and t - i["detectedAt"] < window), None)
+        if inc is None:
+            return
+        impact = inc.setdefault("impact", [])
+        if any(x["serviceId"] == sid for x in impact):
+            return
+        impact.append({"serviceId": sid, "at": t, "signal": kind,
+                       "metrics": self._snapshot_metrics(sid)})
+        self._save_incident(inc)
 
     def detector_report(self) -> list[dict]:
         """Per-service detector state, for inspection via /api/ml/status."""
@@ -845,6 +872,8 @@ class Core:
             chaosRun=self.chaos_run,
             settings=self.settings,
             guardrails={"actionsByService": self.guardrails},
+            policyTrust={"floor": config.TRUST_FLOOR, "initial": round(self.trust.score(None), 3),
+                         "relapseWindowSec": config.RELAPSE_WINDOW_SEC, "records": self.trust.doc()},
             research=evaluation.compute(
                 self.experiments, self.detections,
                 self.eval_counters["healthyWindows"], self.eval_counters["fpWindows"],
@@ -906,6 +935,8 @@ class Core:
         if inc_id is None or not self._linked(inc_id) or self.chaos_run is None:
             return
         t = now_ms()
+        if self.run and self.run.get("relapses") and step in ("detected", "analyzing", "policy_check"):
+            step = "relapsed"
         steps = self.chaos_run["steps"]
         if any(s["id"] == step for s in steps):
             for s in steps:
@@ -965,7 +996,12 @@ class Core:
             )
             self._terminal(exe, f"classification: {fault}", "info")
             self._terminal(exe, f"signature match: {diag['match']:.2f}", "info")
-            self._run_console(inc["id"], diagnosisNote=f"{fault} · signature match {round(diag['match'] * 100)}%")
+            if fault != "unknown":
+                self._check_relapse(inc, exe, sid, fault)
+            note = f"{fault} · signature match {round(diag['match'] * 100)}%"
+            if inc.get("recurrenceOf"):
+                note += f" · relapse of {inc['recurrenceOf']} after {inc['relapseAfterSec']}s"
+            self._run_console(inc["id"], diagnosisNote=note)
             self._stage(inc, "analyzed", "complete", f"Signature match {round(diag['match'] * 100)}% — {fault}.")
             self._stage(inc, "policy_check", "active")
             self._phase(inc["id"], "policy_check")
@@ -1004,6 +1040,22 @@ class Core:
                 )
                 return
 
+            trust = self.trust.trust(policy["id"], sid)
+            inc["trustAtDecision"] = round(trust, 3)
+            if self.settings["autoRemediation"] and trust < config.TRUST_FLOOR:
+                rec = self.trust.record(policy["id"], sid) or {}
+                why = (f"{rec.get('relapses', 0)} relapse(s), {rec.get('failures', 0)} failure(s), "
+                       f"{rec.get('successes', 0)} durable fix(es)")
+                self._terminal(exe, f"policy trust {trust:.2f} < {config.TRUST_FLOOR:.2f} ({why}) → escalating", "error")
+                await self._escalate(
+                    inc, exe, sid,
+                    policy_note=f"Policy trust {trust:.2f} below {config.TRUST_FLOOR:.2f} — {policy['id']} demoted to approval",
+                    outcome_label="Policy trust too low — escalated to operator",
+                    policy_detail=f"{policy['id']} on {sid} has earned trust {trust:.2f} ({why}); "
+                                  f"autonomy requires {config.TRUST_FLOOR:.2f}.",
+                    toast=f"{policy['action']} keeps failing to hold on {sid} — operator review needed.",
+                )
+                return
             self._run_console(inc["id"], policyNote=f"Safe automatic action available: {policy['actionKind']} ({policy['id']})")
             verdict_g = self._guard(sid, policy, inc, exe)
             if verdict_g != "execute":
@@ -1058,6 +1110,8 @@ class Core:
             except Exception as exc:  # noqa: BLE001
                 self._terminal(exe, f"action failed: {exc}", "error")
                 self._stage(inc, "remediation", "failed", f"{policy['actionKind']} failed: {exc}")
+                self.trust.failed(policy["id"], sid, now_ms(), "action_failed")
+                self._save_trust()
                 await self._escalate(
                     inc, exe, sid,
                     policy_note=f"{policy['actionKind']} failed — escalating",
@@ -1084,6 +1138,8 @@ class Core:
                 ok, checks = await self._verify(sid, fault, inc, exe)
                 if not ok:
                     self._stage(inc, "verification", "failed", "Service did not return to healthy bounds.")
+                    self.trust.failed(policy["id"], sid, now_ms(), "verify_failed")
+                    self._save_trust()
                     await self._escalate(
                         inc, exe, sid,
                         policy_note=f"{policy['actionKind']} ran but verification failed",
@@ -1111,6 +1167,8 @@ class Core:
             self._event("verification", f"Auto-recovery complete — {sid} healthy", "ok", sid)
             self.hub.notify("success", "Auto-healed", f"{inc['id']} on {sid} resolved in {recovery}s.")
             exe["outcome"] = "success"
+            self.trust.executed(policy["id"], sid, fault, inc["id"], t)
+            self._save_trust()
         except asyncio.CancelledError:
             if inc is not None and inc["status"] not in ("resolved", "escalated"):
                 inc["status"] = "escalated"
@@ -1187,7 +1245,8 @@ class Core:
             "lines": [],
         }
         run = self.run
-        if run is not None and run.get("injectedAt") and run["target"] == sid and not run.get("incidentId"):
+        if (run is not None and run.get("injectedAt") and run["target"] == sid
+                and not run.get("incidentId") and not run.get("reinjectAt")):
             run["incidentId"] = inc_id
             inc["scenarioId"] = run["scenarioId"]
             if self.chaos_run is not None:
@@ -1223,6 +1282,31 @@ class Core:
         self._log("ERROR", sid, f"Escalated: {outcome_label}")
         self.hub.notify("warning", "Escalated to operator", toast)
         self.db.audit(now_ms(), {"type": "escalation", "incidentId": inc["id"], "serviceId": sid, "reason": outcome_label})
+
+    def _save_trust(self) -> None:
+        self.db.put("trust", self.trust.export())
+
+    def _check_relapse(self, inc: dict, exe: dict, sid: str, fault: str) -> None:
+        """The same fault returning after a fix means the fix was not durable."""
+        t = now_ms()
+        hit = self.trust.relapse(sid, fault, t)
+        if hit is None:
+            return
+        self._save_trust()
+        after = round((t - hit["at"]) / 1000)
+        prev = self._incident(hit["incidentId"]) if hit.get("incidentId") else None
+        inc["recurrenceOf"] = hit.get("incidentId")
+        inc["relapseAfterSec"] = after
+        if prev is not None:
+            prev["relapsedAt"] = t
+            prev["relapsedBy"] = inc["id"]
+            self._save_incident(prev)
+        label = hit.get("incidentId") or "previous fix"
+        self._terminal(exe, f"relapse: {fault} returned {after}s after {label} was fixed by {hit['policyId']}", "warn")
+        self._event("incident", f"Relapse — {fault} back on {sid} {after}s after {label}; fix counted as not durable",
+                    "crit", sid)
+        if self.run is not None and self.run.get("incidentId") == inc["id"] and self.chaos_run is not None:
+            self._run_step(inc["id"], "relapsed")
 
     def _guard(self, sid: str, policy: dict, inc: dict, exe: dict) -> str:
         t = now_ms()
@@ -1358,7 +1442,13 @@ class Core:
             }
             self.experiments.append(exp)
             self.experiments = self.experiments[-100:]
-            steps = ESCALATE_STEPS if scn["expected"] == "escalate" else AUTO_HEAL_STEPS
+            if scn.get("recurs"):
+                steps = AUTO_HEAL_STEPS + ["relapsed", "escalated"]
+            else:
+                steps = ESCALATE_STEPS if scn["expected"] == "escalate" else AUTO_HEAL_STEPS
+            # A deliberately injected fault is a new fault, not a relapse of
+            # whatever was fixed before.
+            self.trust.pending = [p for p in self.trust.pending if p["serviceId"] != target]
             self.chaos_run = {
                 "runId": exp_id, "scenarioId": scenario_id, "title": scn["title"], "target": target,
                 "metric": scn["metric"], "threshold": scn["threshold"], "thresholdLabel": scn["thresholdLabel"],
@@ -1369,7 +1459,7 @@ class Core:
                 "recoverySec": None,
             }
             self.run = {"id": exp_id, "scenarioId": scenario_id, "target": target, "injectedAt": None,
-                        "incidentId": None}
+                        "incidentId": None, "armedAt": None, "relapses": 0, "reinjectAt": None}
             self.scenario_phase = "injecting"
             self.db.upsert("experiment", exp_id, exp["injectedAt"], exp)
             self._publish()
@@ -1397,6 +1487,7 @@ class Core:
                 return
             t = now_ms()
             run["injectedAt"] = t
+            run["armedAt"] = t
             exp = self._experiment(run_id)
             if exp:
                 exp["injectedAt"] = t
@@ -1411,13 +1502,28 @@ class Core:
             self._publish()
 
             # Wait for real detection; the pipeline finishes the run.
-            hard_deadline = time.monotonic() + 300
+            hard_deadline = time.monotonic() + 300 * (1 + scn.get("recurs", 0))
             while True:
                 await asyncio.sleep(0.5)
                 current = self.run
                 if current is None or current["id"] != run_id:
                     return
-                if not current.get("incidentId") and now_ms() - t > config.DETECTION_TIMEOUT_SEC * 1000:
+                if current.get("reinjectAt") and now_ms() >= current["reinjectAt"]:
+                    current["reinjectAt"] = None
+                    try:
+                        await self._apply_fault(current["scenarioId"], current["target"])
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("re-injection failed: %s", exc)
+                        self._close_run("failed")
+                        return
+                    current["armedAt"] = now_ms()
+                    self._event("incident", f"Underlying bug re-emerged — {scn['faultType']} on {current['target']} "
+                                f"(recurrence {current['relapses']})", "warn", current["target"])
+                    self._log("WARN", current["target"], "Chaos Lab: leak re-emerged after restart (bug not fixed)")
+                    self._publish()
+                armed = current.get("armedAt") or t
+                if (not current.get("incidentId") and not current.get("reinjectAt")
+                        and now_ms() - armed > config.DETECTION_TIMEOUT_SEC * 1000):
                     self._event("anomaly", f"No detection within {config.DETECTION_TIMEOUT_SEC}s — run recorded as missed", "crit", run["target"])
                     self.hub.notify("warning", "Fault not detected", f"{scn['title']} on {run['target']} was missed.")
                     await self._revert_faults()
@@ -1446,6 +1552,7 @@ class Core:
             raise RuntimeError(f"{target} is not running")
         path = {
             "memory-leak": "/chaos/memory-leak?mb_per_sec=3",
+            "recurring-leak": "/chaos/memory-leak?mb_per_sec=3",
             "unknown-anomaly": "/chaos/mixed?seconds=150",
             "service-crash": "/chaos/crash",
             "latency-injection": "/chaos/latency?ms=650",
@@ -1492,7 +1599,19 @@ class Core:
 
     def _finish_run(self, inc: dict) -> None:
         outcome = "auto_healed" if inc["status"] == "resolved" else "escalated"
-        exp = self._experiment(self.run["id"]) if self.run else None
+        run = self.run
+        scn = SCENARIOS.get(run["scenarioId"], {}) if run else {}
+        if run is not None and outcome == "auto_healed" and run["relapses"] < scn.get("recurs", 0):
+            # The restart cleared the symptom, not the bug: it comes back.
+            run["relapses"] += 1
+            run["incidentId"] = None
+            run["reinjectAt"] = now_ms() + config.RELAPSE_REINJECT_SEC * 1000
+            if self.chaos_run is not None:
+                self.chaos_run["healthChecks"] = []
+                self.chaos_run["policyNote"] = (f"Fix applied — the underlying bug is still there; "
+                                                f"expect it back in ~{config.RELAPSE_REINJECT_SEC}s")
+            return
+        exp = self._experiment(run["id"]) if run else None
         if exp and outcome == "auto_healed":
             exp["remediatedAt"] = inc.get("resolvedAt")
         self._close_run(outcome)
@@ -1539,6 +1658,10 @@ class Core:
             self.container_override.clear()
             self.deferred.clear()
             self.escalated_at.clear()
+            # Earned trust survives a reset; open durability checks do not,
+            # because the faults they were watching for have been reverted.
+            self.trust.pending.clear()
+            self._save_trust()
             self.systemic_until = 0
             self.diagnosis = None
             self.chaos_run = None
@@ -1550,6 +1673,16 @@ class Core:
             self._publish()
         await self.hub.broadcast_snapshot()
         return {"ok": True, "actions": actions}
+
+    async def reset_trust(self, policy_id: str | None, service_id: str | None) -> dict:
+        async with self._lock:
+            self.trust.reset(policy_id, service_id)
+            self._save_trust()
+            scope = f"{policy_id} on {service_id}" if policy_id else "all policies"
+            self._event("remediation", f"Policy trust reset by operator — {scope}", "info", service_id)
+            self.db.audit(now_ms(), {"type": "trust_reset", "policyId": policy_id, "serviceId": service_id})
+            self._publish()
+            return {"ok": True, "policyTrust": self.trust.doc()}
 
     async def update_settings(self, patch: dict) -> dict:
         async with self._lock:
@@ -1604,6 +1737,12 @@ class Core:
                     self._terminal(exe, text, level)
                 exe["outcome"] = "success"
                 inc = self._incident(incident_id) if incident_id else None
+                fault = ((inc or {}).get("diagnosis") or {}).get("faultType") or next(
+                    (f for f, p in FAULT_POLICY.items() if p == policy_id), None)
+                if fault and fault != "unknown":
+                    # An operator-approved fix that holds earns the policy trust back.
+                    self.trust.executed(policy_id, service_id, fault, incident_id, now_ms())
+                    self._save_trust()
                 if inc and inc["status"] == "escalated":
                     inc.update(status="resolved", resolvedAt=now_ms(),
                                recoverySec=round((now_ms() - inc["detectedAt"]) / 1000, 1),

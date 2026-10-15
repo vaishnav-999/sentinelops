@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { IS_LIVE } from "@/lib/api/mode";
 import {
   isReportable,
+  type Grounding,
   type IncidentReportResponse,
 } from "@/lib/ai/incident-report";
 import type { Incident } from "@/lib/types";
@@ -114,6 +115,7 @@ function ReportBody({ data }: { data: IncidentReportResponse }) {
           </>
         )}
       </div>
+      <GroundingNote grounding={data.grounding} />
       <dl className="flex flex-col gap-3">
         <Item label="Summary" text={report.summary} />
         <Item label="Impact" text={report.impact} />
@@ -130,6 +132,26 @@ function ReportBody({ data }: { data: IncidentReportResponse }) {
           </dd>
         </div>
       </dl>
+    </div>
+  );
+}
+
+function GroundingNote({ grounding }: { grounding: Grounding | undefined }) {
+  if (!grounding) return null;
+  if (grounding.checked === 0) {
+    return <p className="text-xs text-muted">No numbers to verify in this report.</p>;
+  }
+  const clean = grounding.unverified.length === 0;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant={clean ? "ok" : "warn"}>
+        Numbers verified {grounding.grounded} of {grounding.checked}
+      </Badge>
+      <span className="text-xs text-muted">
+        {clean
+          ? "Every number matches the incident record."
+          : `Not found in the incident record: ${grounding.unverified.join(", ")}. Treat these as unverified.`}
+      </span>
     </div>
   );
 }

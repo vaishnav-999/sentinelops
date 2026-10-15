@@ -119,6 +119,13 @@ SCENARIOS = {
         "title": "Cache Saturation", "faultType": "cache_saturation", "target": "redis-cache",
         "metric": "memory", "threshold": 90, "thresholdLabel": "memory > 90%", "expected": "auto_heal",
     },
+    # The restart clears the symptom but not the bug, which re-emerges once.
+    # Earned trust, not a rate limit, is what stops the second blind restart.
+    "recurring-leak": {
+        "title": "Recurring Leak", "faultType": "memory_leak", "target": "payment-worker",
+        "metric": "memory", "threshold": 90, "thresholdLabel": "memory > 90%", "expected": "escalate",
+        "recurs": 1,
+    },
 }
 
 # Static threshold rules: the conventional-alerting baseline the ML detector is

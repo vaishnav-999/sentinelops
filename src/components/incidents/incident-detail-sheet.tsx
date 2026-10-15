@@ -39,6 +39,7 @@ import {
 } from "@/lib/incidents";
 import type { Incident, RemediationPolicy, ServiceMetrics } from "@/lib/types";
 import { SAMPLE_QUALIFIER } from "@/lib/api/mode";
+import { plainSummary } from "@/lib/incident-story";
 
 /**
  * The incident story, end to end (SPEC 11): what was seen, what it was matched
@@ -106,6 +107,7 @@ function Body({
   const audit = auditLog(incident, policy);
   const observed = observation(incident, baseline);
   const live = isActive(incident);
+  const story = plainSummary(incident, serviceName);
 
   return (
     <>
@@ -136,6 +138,79 @@ function Body({
       </SheetHeader>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {/* 1b. Plain-language summary for non-specialist readers */}
+        <Section title="What happened">
+          <div className="flex flex-col gap-1.5">
+            {story.map((line) => (
+              <p key={line} className="text-sm text-text">
+                {line}
+              </p>
+            ))}
+          </div>
+        </Section>
+
+        {/* 1c. Recurrence: this incident and the fix it proves did not hold */}
+        {incident.recurrenceOf || incident.relapsedBy ? (
+          <Section title="Recurrence">
+            <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-3">
+              <Field
+                label={incident.recurrenceOf ? "Relapse of" : "Came back as"}
+                value={(incident.recurrenceOf ?? incident.relapsedBy) as string}
+                mono
+              />
+              <Field
+                label="Fix lasted"
+                value={
+                  incident.relapseAfterSec !== undefined
+                    ? `${incident.relapseAfterSec} s`
+                    : incident.relapsedAt !== undefined && incident.resolvedAt !== undefined
+                      ? formatDurationMs(incident.relapsedAt - incident.resolvedAt)
+                      : "—"
+                }
+                mono
+              />
+              <Field
+                label="Policy trust at decision"
+                value={
+                  incident.trustAtDecision !== undefined
+                    ? `${Math.round(incident.trustAtDecision * 100)}%`
+                    : "—"
+                }
+                mono
+              />
+            </dl>
+          </Section>
+        ) : null}
+
+        {/* 1d. Blast radius: symptoms charged to this root instead of opened */}
+        {incident.impact?.length ? (
+          <Section title="Blast radius">
+            <p className="mb-2 text-xs text-muted">
+              Services that degraded because of this fault. Each would otherwise have
+              opened its own incident and possibly a restart.
+            </p>
+            <ol className="flex flex-col">
+              {incident.impact.map((x) => (
+                <li
+                  key={x.serviceId}
+                  className="flex items-baseline gap-3 border-b border-border py-1.5 last:border-b-0"
+                >
+                  <span className={cn("w-40 shrink-0 text-sm text-text", numeric)}>
+                    {x.serviceId}
+                  </span>
+                  <span className={cn("w-20 shrink-0 text-sm text-text-2", numeric)}>
+                    {formatClockTime(x.at)}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {x.signal === "ml" ? "Anomaly detector" : "Threshold rule"} · no
+                    separate incident
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </Section>
+        ) : null}
+
         {/* 2. Lifecycle */}
         <Section title="Lifecycle">
           <ol className="flex flex-col">

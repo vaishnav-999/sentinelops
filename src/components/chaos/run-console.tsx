@@ -28,6 +28,7 @@ const STEP_LABEL: Record<RunStepId, string> = {
   remediating: "Remediating",
   verifying: "Verifying",
   resolved: "Resolved",
+  relapsed: "Relapsed",
   escalated: "Escalated",
 };
 
@@ -122,7 +123,8 @@ export function RunConsole() {
         {run.steps.map((step, i) => {
           const done = step.at !== null && run.current !== step.id;
           const active = run.current === step.id;
-          const failed = step.id === "escalated" && step.at !== null;
+          const failed =
+            (step.id === "escalated" || step.id === "relapsed") && step.at !== null;
           return (
             <li key={step.id} className="flex items-center gap-2">
               {i > 0 ? <span className="text-xs text-muted">→</span> : null}

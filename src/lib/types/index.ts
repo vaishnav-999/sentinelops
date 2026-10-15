@@ -373,6 +373,51 @@ export interface Incident {
    */
   outcomeLabel?: string;
   scenarioId?: ScenarioId;
+  /** Live mode: earlier incident whose fix this one proves was not durable. */
+  recurrenceOf?: string;
+  /** Seconds between the earlier fix and this recurrence. */
+  relapseAfterSec?: number;
+  /** Set on the earlier incident once the same fault returns. */
+  relapsedAt?: number;
+  relapsedBy?: string;
+  /** Callers that degraded because of this incident (blast radius). */
+  impact?: ImpactRecord[];
+  /** Earned trust of the selected policy on this service when it decided. */
+  trustAtDecision?: number;
+}
+
+/**
+ * A downstream symptom charged to a root incident. Each one is an incident,
+ * and possibly a remediation, that was deliberately not opened.
+ */
+export interface ImpactRecord {
+  serviceId: string;
+  at: number;
+  signal: "ml" | "threshold";
+  metrics?: Partial<ServiceMetrics>;
+}
+
+/** Evidence for one (policy, service) pair under the earned-autonomy model. */
+export interface PolicyTrustRecord {
+  policyId: string;
+  serviceId: string;
+  successes: number;
+  failures: number;
+  relapses: number;
+  lastOutcome: "durable" | "relapsed" | "verify_failed" | "action_failed" | null;
+  updatedAt: number | null;
+  trust: number;
+  autonomous: boolean;
+  /** A fix is awaiting its durability verdict since this time. */
+  pendingSince: number | null;
+}
+
+export interface PolicyTrustState {
+  floor: number;
+  /** Trust of a pair with no evidence yet (the prior mean). */
+  initial: number;
+  relapseWindowSec: number;
+  records: PolicyTrustRecord[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -434,7 +479,9 @@ export type ScenarioId =
   | "cpu-spike"
   | "service-crash"
   | "latency-injection"
-  | "cache-saturation";
+  | "cache-saturation"
+  /** Live mode only: the leak returns after the first fix. */
+  | "recurring-leak";
 
 /** Phase of a running scenario, mirrored into the store for live UI. */
 export type ScenarioPhase =
@@ -498,6 +545,8 @@ export type RunStepId =
   | "remediating"
   | "verifying"
   | "resolved"
+  /** Live recurring scenarios: the same fault came back after a fix. */
+  | "relapsed"
   | "escalated";
 
 export interface RunStepRecord {

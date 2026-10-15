@@ -41,6 +41,16 @@ STALL_GAP_SEC = 5
 # This many independently degraded services at once = host-wide event.
 SYSTEMIC_MIN_ROOTS = 3
 SYSTEMIC_HOLD_SEC = 30
+# Earned autonomy (trust.py): Beta prior worth 4 successes / 1 failure, so a
+# new (policy, service) pair starts at 0.80 and loses autonomy at its first
+# relapse (0.67), while a pair with one durable fix survives one (0.71).
+TRUST_PRIOR_SUCCESS = 4.0
+TRUST_PRIOR_FAILURE = 1.0
+TRUST_FLOOR = 0.7
+# A fix is durable if the same fault does not return within this window.
+RELAPSE_WINDOW_SEC = 600
+# Recurring-leak scenario: delay before the persisting bug re-emerges.
+RELAPSE_REINJECT_SEC = 12
 # A service escalated to the operator this recently is a known fault, not a
 # new independent root.
 ESCALATION_MEMORY_SEC = 600

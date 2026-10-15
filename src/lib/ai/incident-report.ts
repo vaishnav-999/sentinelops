@@ -28,6 +28,19 @@ export interface IncidentReportResponse {
   model?: string;
   /** Why the deterministic report was used instead of Gemini. */
   reason?: string;
+  grounding: Grounding;
+}
+
+/**
+ * Every number in the narrative checked against the incident record. A number
+ * is grounded when it equals (after rounding, or as a percentage of a 0–1
+ * value) a number the pipeline recorded. Unverified numbers are flagged to the
+ * reader, never silently removed.
+ */
+export interface Grounding {
+  checked: number;
+  grounded: number;
+  unverified: string[];
 }
 
 /** The subset of an incident sent to the model, length-capped. */
@@ -50,6 +63,12 @@ export interface ReportInput {
   auto: boolean;
   outcomeLabel?: string;
   stages: { stage: IncidentStage; status: StageStatus; atSec?: number; detail?: string }[];
+  recurrenceOf?: string;
+  relapseAfterSec?: number;
+  relapsedBy?: string;
+  trustAtDecision?: number;
+  /** Downstream services charged to this incident. */
+  impactedServices?: string[];
 }
 
 const SEVERITIES: IncidentSeverity[] = ["critical", "warning", "info"];
@@ -155,6 +174,70 @@ export function toReportInput(raw: unknown): ReportInput | null {
     auto: r.auto === true,
     outcomeLabel: str(r.outcomeLabel, 120),
     stages,
+    recurrenceOf: str(r.recurrenceOf, 32),
+    relapseAfterSec: num(r.relapseAfterSec),
+    relapsedBy: str(r.relapsedBy, 32),
+    trustAtDecision: num(r.trustAtDecision),
+    impactedServices: Array.isArray(r.impact)
+      ? r.impact
+          .slice(0, 8)
+          .map((x) => str((x as Record<string, unknown> | null)?.serviceId, 64))
+          .filter((x): x is string => x !== undefined)
+      : undefined,
+  };
+}
+
+/* ------------------------------------------------------------ grounding */
+
+/** Numbers in prose, skipping digits inside identifiers (INC-1001, p95) and clock times. */
+const NUMBER_RE = /(?<![\w.:-])\d+(?:\.\d+)?(?![\w:]|\.\d)/g;
+
+function recordedNumbers(input: ReportInput): number[] {
+  const out: number[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "number" && Number.isFinite(v)) {
+      out.push(v);
+      if (Math.abs(v) <= 1) out.push(v * 100);
+    } else if (typeof v === "string") {
+      for (const m of v.match(NUMBER_RE) ?? []) out.push(Number(m));
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v && typeof v === "object") {
+      Object.values(v).forEach(walk);
+    }
+  };
+  walk(input);
+  // Before → after changes are facts too.
+  for (const key of METRIC_KEYS) {
+    const b = input.before?.[key];
+    const a = input.after?.[key];
+    if (b !== undefined && a !== undefined) out.push(Math.abs(b - a));
+  }
+  // Durations between recorded stages.
+  const times = input.stages.map((s) => s.atSec).filter((x): x is number => x !== undefined);
+  for (const x of times) for (const y of times) if (y > x) out.push(y - x);
+  return out;
+}
+
+function matches(text: string, recorded: number[]): boolean {
+  const n = Number(text);
+  const decimals = text.includes(".") ? text.split(".")[1].length : 0;
+  const tol = 0.5 * 10 ** -decimals + 1e-9;
+  return recorded.some((a) => Math.abs(Math.abs(a) - n) <= tol);
+}
+
+/** Checks every number the report states against the incident it describes. */
+export function groundReport(report: IncidentReport, input: ReportInput): Grounding {
+  const recorded = recordedNumbers(input);
+  const text = [report.summary, report.impact, report.rootCause, report.resolution, ...report.followUps].join(
+    "\n",
+  );
+  const found = text.match(NUMBER_RE) ?? [];
+  const unverified = found.filter((x) => !matches(x, recorded));
+  return {
+    checked: found.length,
+    grounded: found.length - unverified.length,
+    unverified: [...new Set(unverified)].slice(0, 12),
   };
 }
 
@@ -208,13 +291,26 @@ export function fallbackReport(input: ReportInput): IncidentReport {
   const outcome = resolved
     ? `auto-healed${input.recoverySec !== undefined ? ` in ${input.recoverySec} s` : ""}`
     : `escalated to an operator${input.outcomeLabel ? ` (${input.outcomeLabel})` : ""}`;
-  const summary = `${input.id}: ${input.title} on ${input.serviceId}, ${input.severity} severity, ${outcome}.`;
+  const summary = [
+    `${input.id}: ${input.title} on ${input.serviceId}, ${input.severity} severity, ${outcome}.`,
+    input.recurrenceOf
+      ? `It is a recurrence of ${input.recurrenceOf}${
+          input.relapseAfterSec !== undefined ? `, ${input.relapseAfterSec} s after that fix` : ""
+        }, so the earlier fix did not hold.`
+      : null,
+    input.relapsedBy ? `The fault returned later as ${input.relapsedBy}.` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const before = describeMetrics(input.before);
   const after = describeMetrics(input.after);
   const impact = [
     before ? `At detection: ${before}.` : "No metric snapshot was recorded at detection.",
     after ? `After remediation: ${after}.` : null,
+    input.impactedServices?.length
+      ? `Downstream symptoms on ${input.impactedServices.join(", ")} were attributed to this fault; no separate incidents were opened.`
+      : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -244,6 +340,9 @@ export function fallbackReport(input: ReportInput): IncidentReport {
     .join(" ");
 
   const followUps = [
+    ...(input.recurrenceOf
+      ? ["Fix the underlying defect; restarting has already failed to hold once."]
+      : []),
     ...(FOLLOW_UPS[d?.faultType ?? ""] ?? [
       "Have an operator review the telemetry; no known fault signature matched.",
       "If this pattern recurs, add a fault signature and a safe remediation policy for it.",
@@ -268,8 +367,12 @@ export const REPORT_SYSTEM_PROMPT = [
   "Detection (Isolation Forest anomaly score and a static threshold rule), diagnosis (fault",
   "signature match) and remediation were decided by deterministic policy; describe them, do not",
   "second-guess or change them. Stage times are seconds after detection. Say 'signature match',",
-  "never 'confidence'. Plain sentences, no markdown, no emojis. Each field at most 3 sentences;",
-  "followUps are 2 to 4 short, concrete actions for a human operator.",
+  "never 'confidence'. If recurrenceOf is set, the same fault returned after an earlier fix",
+  "(relapseAfterSec later) and that fix did not hold; trustAtDecision is the policy's earned",
+  "trust (0-1) when it decided. impactedServices degraded because of this fault and were not",
+  "acted on. Every number you write is checked against the JSON, so copy numbers exactly and",
+  "do not compute new ones. Plain sentences, no markdown, no emojis. Each field at most 3",
+  "sentences; followUps are 2 to 4 short, concrete actions for a human operator.",
 ].join(" ");
 
 export const REPORT_JSON_SCHEMA = {

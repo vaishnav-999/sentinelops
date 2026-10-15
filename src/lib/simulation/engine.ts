@@ -81,7 +81,8 @@ export type EngineNotifier = (
   description?: string,
 ) => void;
 
-const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
+/** Live-only scenarios (recurring-leak) have no simulated choreography. */
+const SCENARIOS: Partial<Record<ScenarioId, ScenarioDefinition>> = {
   "memory-leak": memoryLeakScenario,
   "unknown-anomaly": unknownAnomalyScenario,
   "cpu-spike": cpuSpikeScenario,
@@ -144,6 +145,7 @@ const STEP_PHASE: Record<RunStepId, ScenarioPhase> = {
   remediating: "remediating",
   verifying: "verifying",
   resolved: "resolved",
+  relapsed: "detected",
   escalated: "escalated",
 };
 

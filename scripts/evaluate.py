@@ -1,4 +1,4 @@
-﻿"""Evaluation campaign for the paper: repeated fault injection + healthy soak.
+"""Evaluation campaign for the paper: repeated fault injection + healthy soak.
 
 Runs every selected Chaos Lab scenario N times against the live backend
 (resetting the environment between trials so guardrails and replicas do not
@@ -41,6 +41,10 @@ from pathlib import Path
 SCENARIOS = [
     "latency-injection", "memory-leak", "cpu-spike", "service-crash", "cache-saturation", "unknown-anomaly",
 ]
+# Relapse trials: the fault returns after the first fix. Reported separately,
+# not mixed into the single-fault detection and remediation tables.
+RECURRING = ["recurring-leak"]
+EXPECTED = {"unknown-anomaly": "escalated", "recurring-leak": "escalated"}
 DETECTORS = ("threshold", "ml", "hybrid")
 DETECTOR_LABEL = {"threshold": "Static threshold", "ml": "Isolation Forest", "hybrid": "Hybrid (either)"}
 FAULT_TYPES = ["latency_spike", "memory_leak", "cpu_saturation", "service_crash", "cache_saturation", "unknown"]
@@ -140,7 +144,7 @@ def campaign(args) -> Path:
     meta = {
         "config": args.config, "trials": args.trials, "scenarios": args.scenarios, "soakMin": args.soak_min,
         "gapSec": args.gap, "base": args.base, "startedAt": int(time.time() * 1000),
-        "host": f"{platform.system()} {platform.release()} Â· Python {platform.python_version()}",
+        "host": f"{platform.system()} {platform.release()} · Python {platform.python_version()}",
         "commit": git_commit(), "experimentIds": [], "soak": None,
     }
     traces: list[dict] = []
@@ -149,6 +153,8 @@ def campaign(args) -> Path:
         for i, scenario in enumerate(order, 1):
             target = scenarios_meta[scenario]["target"]
             api.call("/api/system/reset", {})
+            # Trials are independent: no trust earned or lost in an earlier one.
+            api.call("/api/policies/trust/reset", {})
             time.sleep(args.gap)
             if not wait_quiet(api):
                 log("  environment did not settle; running the trial anyway")
@@ -237,6 +243,47 @@ def sec(t: int | None, t0: int) -> float | None:
     return None if t is None else round((t - t0) / 1000, 2)
 
 
+def relapse_summary(rows: list[dict], incidents: list[dict]) -> dict | None:
+    """Recurring-fault trials: was the relapse recognised, and did earned trust
+    (not a rate limit) stop the second blind restart?"""
+    if not rows:
+        return None
+    by_id = {i["id"]: i for i in incidents}
+    first_healed = recognised = trust_stopped = 0
+    gaps = []
+    for r in rows:
+        first = by_id.get(r["incidentId"] or "")
+        if first and first["status"] == "resolved":
+            first_healed += 1
+        second = by_id.get(r["relapseIncidentId"] or "")
+        if second and second.get("recurrenceOf") == r["incidentId"]:
+            recognised += 1
+            if second.get("relapseAfterSec") is not None:
+                gaps.append(second["relapseAfterSec"])
+            if second.get("outcomeLabel", "").startswith("Policy trust too low"):
+                trust_stopped += 1
+    n = len(rows)
+    return {"n": n, "firstHealed": first_healed, "firstHealedCi": wilson(first_healed, n),
+            "relapseRecognised": recognised, "relapseRecognisedCi": wilson(recognised, n),
+            "stoppedByTrust": trust_stopped, "stoppedByTrustCi": wilson(trust_stopped, n),
+            "fixLastedSec": dist(gaps)}
+
+
+def blast_summary(exps: list[dict], incidents: list[dict]) -> dict:
+    """Downstream symptoms charged to a root incident instead of opening their own."""
+    per_fault: dict = {}
+    for e in exps:
+        if e["scenarioId"] in RECURRING:
+            continue
+        inc = link_incident(e, incidents)
+        n_imp = len((inc or {}).get("impact") or [])
+        pf = per_fault.setdefault(e["faultType"], {"trials": 0, "withImpact": 0, "suppressed": 0})
+        pf["trials"] += 1
+        pf["withImpact"] += 1 if n_imp else 0
+        pf["suppressed"] += n_imp
+    return per_fault
+
+
 def analyze(out: Path) -> dict:
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     export = json.loads((out / "export.json").read_text(encoding="utf-8"))
@@ -251,7 +298,7 @@ def analyze(out: Path) -> dict:
         hyb = min([x for x in (thr, ml) if x is not None], default=None)
         inc = link_incident(e, incidents)
         diag = (inc or {}).get("diagnosis") or {}
-        expected = "escalated" if e["faultType"] == "unknown" else "auto_healed"
+        expected = EXPECTED.get(e["scenarioId"], "auto_healed")
         resolved = inc is not None and inc["status"] == "resolved" and inc.get("resolvedAt")
         rows.append({
             "runId": e["id"], "scenario": e["scenarioId"], "faultType": e["faultType"], "target": e["target"],
@@ -263,8 +310,13 @@ def analyze(out: Path) -> dict:
             "handledCorrectly": e["outcome"] == expected,
             "detectToResolveSec": (inc or {}).get("recoverySec") if resolved else None,
             "injectToResolveSec": sec(inc["resolvedAt"], t0) if resolved else None,
+            "relapseIncidentId": (inc or {}).get("relapsedBy"),
+            "blastRadius": len((inc or {}).get("impact") or []),
         })
     write_csv(out / "runs.csv", rows)
+    relapse = relapse_summary([r for r in rows if r["scenario"] in RECURRING], incidents)
+    blast = blast_summary(exps, incidents)
+    rows = [r for r in rows if r["scenario"] not in RECURRING]
 
     # ---- detection, per fault type and overall
     detection: dict = {}
@@ -349,7 +401,8 @@ def analyze(out: Path) -> dict:
         }
 
     summary = {"meta": meta, "config": export.get("config"), "detection": detection, "falsePositives": fp,
-               "scores": scores, "diagnosis": diagnosis, "remediation": remediation}
+               "scores": scores, "diagnosis": diagnosis, "remediation": remediation,
+               "relapse": relapse, "blastRadius": blast}
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (out / "summary.md").write_text(markdown(summary), encoding="utf-8")
     return summary
@@ -360,29 +413,29 @@ def analyze(out: Path) -> dict:
 
 def pct(k: int, n: int, ci) -> str:
     if n == 0:
-        return "â€”"
+        return "—"
     s = f"{k}/{n} ({k / n * 100:.0f}%"
-    return s + (f", 95% CI {ci[0] * 100:.0f}â€“{ci[1] * 100:.0f}%)" if ci else ")")
+    return s + (f", 95% CI {ci[0] * 100:.0f}–{ci[1] * 100:.0f}%)" if ci else ")")
 
 
 def secs(dd: dict | None) -> str:
     if not dd:
-        return "â€”"
-    return f"{dd['median']:.1f} s (mean {dd['mean']:.1f} Â± {dd['sd']:.1f}, p95 {dd['p95']:.1f})"
+        return "—"
+    return f"{dd['median']:.1f} s (mean {dd['mean']:.1f} ± {dd['sd']:.1f}, p95 {dd['p95']:.1f})"
 
 
 def fnum(v, digits: int = 3) -> str:
-    return "â€”" if v is None else f"{v:.{digits}f}"
+    return "—" if v is None else f"{v:.{digits}f}"
 
 
 def markdown(s: dict) -> str:
     m = s["meta"]
     L = [
-        f"# Evaluation â€” {m['config']}",
+        f"# Evaluation — {m['config']}",
         "",
-        f"- Trials per scenario: {m['trials']} Â· scenarios: {', '.join(m['scenarios'])}",
-        f"- Soak: {m['soakMin']} min Â· gap between trials: {m['gapSec']} s Â· commit {m.get('commit') or 'n/a'}",
-        f"- Host: {m['host']} Â· detector config: `{json.dumps(s.get('config'))}`",
+        f"- Trials per scenario: {m['trials']} · scenarios: {', '.join(m['scenarios'])}",
+        f"- Soak: {m['soakMin']} min · gap between trials: {m['gapSec']} s · commit {m.get('commit') or 'n/a'}",
+        f"- Host: {m['host']} · detector config: `{json.dumps(s.get('config'))}`",
         "- Positives = injected trials; negatives = fault-free service-minutes during the soak.",
         "",
         "## Detection rate and time to detect (from injection)",
@@ -394,8 +447,8 @@ def markdown(s: dict) -> str:
         cells = []
         for d in DETECTORS:
             pf = s["detection"][d]["perFault"].get(ft)
-            cells.append("â€”" if not pf else f"{pct(pf['detected'], pf['n'], pf['ci'])}<br>{secs(pf['mttd'])}")
-        if any(c != "â€”" for c in cells):
+            cells.append("—" if not pf else f"{pct(pf['detected'], pf['n'], pf['ci'])}<br>{secs(pf['mttd'])}")
+        if any(c != "—" for c in cells):
             L.append(f"| {ft} | " + " | ".join(cells) + " |")
     L.append("| **all** | " + " | ".join(
         f"{pct(s['detection'][d]['detected'], s['detection'][d]['n'], s['detection'][d]['ci'])}<br>"
@@ -407,7 +460,7 @@ def markdown(s: dict) -> str:
     for d in DETECTORS:
         sc, fp = s["scores"].get(d), s["falsePositives"].get(d)
         if not sc:
-            L.append(f"| {DETECTOR_LABEL[d]} | â€” | â€” | â€” | â€” | â€” | â€” | â€” | â€” | â€” |")
+            L.append(f"| {DETECTOR_LABEL[d]} | — | — | — | — | — | — | — | — | — |")
             continue
         L.append(f"| {DETECTOR_LABEL[d]} | {sc['tp']} | {sc['fn']} | {sc['fp']} | {sc['tn']} | "
                  f"{fnum(sc['precision'])} | {fnum(sc['recall'])} | {fnum(sc['f1'])} | "
@@ -425,10 +478,23 @@ def markdown(s: dict) -> str:
 
     L += ["", "## Remediation", "",
           "Correct handling = auto-healed for known faults, escalated for the unknown anomaly.", "",
-          "| Fault | Correct handling | Detect â†’ resolved | Inject â†’ resolved |", "|---|---|---|---|"]
+          "| Fault | Correct handling | Detect → resolved | Inject → resolved |", "|---|---|---|---|"]
     for ft, r in s["remediation"].items():
         L.append(f"| {ft} | {pct(r['handledCorrectly'], r['n'], r['ci'])} | {secs(r['detectToResolve'])} | "
                  f"{secs(r['injectToResolve'])} |")
+
+    L += ["", "## Blast radius (symptoms attributed to the root incident)", "",
+          "| Fault | Trials | Trials with downstream symptoms | Incidents not opened |", "|---|---|---|---|"]
+    for ft, b in s["blastRadius"].items():
+        L.append(f"| {ft} | {b['trials']} | {b['withImpact']} | {b['suppressed']} |")
+
+    rl = s.get("relapse")
+    if rl:
+        L += ["", "## Relapse and earned autonomy (recurring-leak trials)", "",
+              f"- First fault auto-healed: {pct(rl['firstHealed'], rl['n'], rl['firstHealedCi'])}",
+              f"- Relapse linked to the earlier fix: {pct(rl['relapseRecognised'], rl['n'], rl['relapseRecognisedCi'])}",
+              f"- Second restart withheld by earned trust: {pct(rl['stoppedByTrust'], rl['n'], rl['stoppedByTrustCi'])}",
+              f"- Fix lasted: {secs(rl['fixLastedSec'])}"]
     L.append("")
     return "\n".join(L)
 
@@ -440,7 +506,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base", default="http://127.0.0.1:8000")
     p.add_argument("--trials", type=int, default=5, help="trials per scenario")
-    p.add_argument("--scenarios", nargs="+", default=SCENARIOS, choices=SCENARIOS)
+    p.add_argument("--scenarios", nargs="+", default=SCENARIOS, choices=SCENARIOS + RECURRING)
     p.add_argument("--soak-min", type=int, default=20, help="fault-free minutes for the false-positive rate")
     p.add_argument("--gap", type=int, default=20, help="seconds to settle after each reset")
     p.add_argument("--timeout", type=int, default=300, help="max seconds per trial")

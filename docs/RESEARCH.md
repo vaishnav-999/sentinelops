@@ -35,6 +35,33 @@ Contributions to claim (only what the code does):
    time-to-detect and time-to-recover distributions, rule-only baseline.
 5. Safe escalation: unknown anomalies and guardrail hits go to an operator
    instead of an automated action.
+6. **Earned autonomy.** Each (policy, service) pair carries a Beta-Bernoulli
+   trust score (prior 4 successes / 1 failure, floor 0.70; the Beta reputation
+   model of [14]). A fix only counts as a success once it proves *durable*:
+   the same fault stays away for 10 minutes. A relapse, a failed action or a
+   failed verification counts against the pair. Below the floor, the policy
+   still diagnoses and recommends, but an operator approves. Durable
+   operator-approved fixes earn the trust back. This differs from the usual
+   rate-limit guardrail (N restarts per window), which forgets after the
+   window and cannot tell a fix that held from one that only hid the symptom.
+7. **Relapse detection.** A new incident with the same fault on the same
+   service inside the durability window is linked to the earlier incident
+   (`recurrenceOf` / `relapsedBy`), so "the restart worked" is checked after
+   the fact instead of being assumed at verification time.
+8. **Blast-radius accounting.** When a caller's degradation is attributed to a
+   failing dependency, the symptom is recorded on the root incident (`impact`)
+   and counted as an incident (and possible restart) that was not opened.
+9. **Numerically grounded LLM reports.** Every number in the Gemini narrative
+   is checked against the incident record (after rounding, or as a percentage
+   of a 0–1 value); unverified numbers are shown to the reader. This is a
+   cheap, automatic faithfulness check that complements human rating [10].
+
+On novelty: closed-loop remediation that *learns which fixes hold* is, to our
+knowledge, uncommon in the self-healing literature summarised in [3], [8],
+but related ideas exist (flap detection in classic monitoring tools,
+remediation learning with reinforcement learning, trust in automation). Do a
+targeted search before claiming "first", and phrase the claim as "we propose
+and evaluate" rather than "no prior work".
 
 ## 2. Research questions
 
@@ -44,7 +71,9 @@ Contributions to claim (only what the code does):
 | RQ2 | How often does it raise an alarm when nothing is wrong? | False-positive service-minutes during the soak; precision, specificity, balanced accuracy |
 | RQ3 | How accurately does signature matching identify the injected fault? | Diagnosis accuracy, confusion matrix |
 | RQ4 | Does the closed loop recover services, and how fast? | Correct handling rate; detect→resolved and inject→resolved times; hybrid vs threshold-only campaign |
-| RQ5 (optional) | Are the Gemini reports faithful and useful? | Human rating study (Section 6) |
+| RQ5 (optional) | Are the Gemini reports faithful and useful? | Numbers verified X of Y per report (automatic) + human rating study (Section 6) |
+| RQ6 | Does earned autonomy stop repeated ineffective fixes that a rate limit lets through? | Recurring-leak trials: first fault healed, relapse linked, second restart withheld by trust |
+| RQ7 | How many duplicate incidents and actions does dependency attribution avoid? | Blast-radius table: trials with downstream symptoms, incidents not opened |
 
 ## 3. Method (what the code actually does)
 
@@ -88,9 +117,17 @@ Map each item to MAPE-K [2] in the paper's architecture figure.
   remediated or just restarted is attributed, not remediated. When three or more
   independent services degrade together, remediation is held (host-wide cause).
 
+- Earned autonomy (`backend/app/trust.py`): before the rate-limit guardrail,
+  the pair's trust is checked; below 0.70 the incident escalates with
+  "Policy trust too low". Trust survives an environment reset and is reset
+  only by an operator (`POST /api/policies/trust/reset`).
+
 **Execute + verify**
 - Restart container/worker, clear cache, scale out a replica. Then 3 health
   checks must pass before the incident is resolved.
+- Verification passing starts a 10-minute durability watch. If the same fault
+  returns on that service, the new incident is linked as a relapse and the
+  fix counts as a failure; otherwise it counts as a success.
 
 **Knowledge** — Postgres: incidents, executions, experiments, detections,
 baselines, audit log.
@@ -116,6 +153,10 @@ Docker version for the paper.
    `python scripts/evaluate.py --trials 10 --soak-min 60 --config threshold-only`
 4. Optional repeat on the EC2 server (different hardware = external validity):
    `python scripts/evaluate.py --base https://<ip> --user admin --password ... --insecure --trials 10 --soak-min 60`
+4b. **Relapse campaign (RQ6).** The recurring leak heals once, re-emerges
+   12 s after the fix, and should be escalated by earned trust:
+   `python scripts/evaluate.py --trials 10 --scenarios recurring-leak --soak-min 0`
+   Trust is reset before every trial, so each trial starts from the prior.
 5. Keep each `research/<timestamp>_<config>/` folder. `runs.csv` and
    `traces.csv` are the dataset; `summary.md` has the tables.
 6. To recompute after changing the analysis: `python scripts/evaluate.py --analyze research/<folder>`
@@ -175,8 +216,9 @@ source. Report the mean, and inter-rater agreement if you can.
    and MAPE-K [2], [8], [11]; chaos engineering [3]; LLMs for incidents [9], [10].
 4. System design — MAPE-K architecture figure; each stage from Section 3.
 5. Detector design — iForest changes and why; the false-positive safeguards.
-6. Evaluation — setup (hardware, services, faults table), protocol, RQ1–RQ4
-   results tables and one time-series figure from `traces.csv`.
+6. Evaluation — setup (hardware, services, faults table), protocol, RQ1–RQ7
+   results tables and one time-series figure from `traces.csv` (the
+   recurring-leak sawtooth makes a good earned-autonomy figure).
 7. Discussion — what the threshold rule misses (memory leak), where escalation
    helped, limitations (Section 7).
 8. Conclusion and future work — multi-host, Kubernetes, more fault types,
@@ -210,5 +252,8 @@ source. Report the mean, and inter-rater agreement if you can.
 
 [13] E. B. Wilson, "Probable inference, the law of succession, and statistical inference," *J. American Statistical Association*, vol. 22, no. 158, pp. 209–212, 1927.
 
+[14] A. Jøsang and R. Ismail, "The Beta reputation system," in *Proc. 15th Bled Electronic Commerce Conference*, 2002.
+
 Check each entry against the publisher page before submission (page numbers and
-volume for [6] and [11] were not confirmed).
+volume for [6] and [11] were not confirmed; [14] was added from memory and must
+be checked).

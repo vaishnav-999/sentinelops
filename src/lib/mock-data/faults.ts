@@ -16,11 +16,13 @@ export interface ChaosFault {
   target: string;
   severity: FaultSeverity;
   /** What the platform is expected to do about it. */
-  expected: "Auto-heal" | "Escalate";
+  expected: "Auto-heal" | "Escalate" | "Heal, then escalate";
   /** Button copy, e.g. "Inject Memory Leak". */
   action: string;
   /** Approximate run length in seconds, including the 3 s countdown. */
   durationSec: number;
+  /** Needs the real backend (relapse and earned trust are not simulated). */
+  liveOnly?: boolean;
 }
 
 export const CHAOS_FAULTS: ChaosFault[] = [
@@ -83,5 +85,16 @@ export const CHAOS_FAULTS: ChaosFault[] = [
     expected: "Auto-heal",
     action: "Saturate Cache",
     durationSec: 29,
+  },
+  {
+    scenarioId: "recurring-leak",
+    name: "Recurring Leak",
+    description: "A leak that a restart hides but does not fix.",
+    target: "payment-worker",
+    severity: "High",
+    expected: "Heal, then escalate",
+    action: "Inject Recurring Leak",
+    durationSec: 120,
+    liveOnly: true,
   },
 ];
